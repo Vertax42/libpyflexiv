@@ -163,9 +163,10 @@ void CartesianMotionForceControl::moveToPose(
             throw std::invalid_argument("moveToPose: target_pose contains NaN/Inf");
         }
     }
-    if (duration_sec <= 0.0 || !std::isfinite(duration_sec)) {
-        throw std::invalid_argument("moveToPose: duration_sec must be > 0 and finite");
+    if (duration_sec > 0.0 && !std::isfinite(duration_sec)) {
+        throw std::invalid_argument("moveToPose: duration_sec must be finite");
     }
+    // duration_sec <= 0 means auto-compute (handled by MinJerkTrajectory::init)
 
     std::lock_guard<std::mutex> lock(shm_mutex_);
     shm_->move_request.target_pose = target_pose;
@@ -256,25 +257,6 @@ void CartesianMotionForceControl::PeriodicCallback()
         }
     }
 
-    // 3b. Refresh robot states into SHM (outside lock to minimize contention).
-    //     robot_.states() is a potentially slow IPC call — holding the mutex
-    //     during it blocks Python's setTargetPose()/getState() and can cause
-    //     the RT thread to miss the 1 ms deadline.
-    try {
-        auto rs = robot_.states();
-        std::lock_guard<std::mutex> lock(shm_mutex_);
-        shm_->state_tcp_pose            = rs.tcp_pose;
-        shm_->state_tcp_vel             = rs.tcp_vel;
-        shm_->state_ext_wrench_in_tcp   = rs.ext_wrench_in_tcp;
-        shm_->state_ext_wrench_in_world = rs.ext_wrench_in_world;
-        shm_->state_ft_sensor_raw       = rs.ft_sensor_raw;
-        shm_->state_q                   = rs.q;
-        shm_->state_tau_ext             = rs.tau_ext;
-        shm_->state_sequence.fetch_add(1, std::memory_order_relaxed);
-    } catch (const std::exception& e) {
-        logger()->warn("CartesianMotionForceControl: states() read failed: {}", e.what());
-    }
-
     // 4. Handle state transitions
     //    STREAMING → MOVING: when move_request.pending is consumed
     //    MOVING → MOVING:    new moveToPose restarts the trajectory
@@ -287,7 +269,10 @@ void CartesianMotionForceControl::PeriodicCallback()
         shm_->is_moving.store(true);
     }
 
-    // 5. Execute based on current state
+    // 5. Execute based on current state — send command ASAP, read states AFTER.
+    //    All paths set send_error=true on failure so we skip the state refresh.
+    bool send_error = false;
+
     if (rt_state_ == RTState::MOVING) {
         // --- MOVING state ---
         std::array<double,7> interp_pose;
@@ -299,12 +284,6 @@ void CartesianMotionForceControl::PeriodicCallback()
             // Trajectory complete (or cancelled) — switch back to STREAMING
             rt_state_ = RTState::STREAMING;
             shm_->is_moving.store(false);
-
-            // Use the final trajectory pose as the streaming command
-            // so the robot holds position smoothly
-            interp_pose = trajectory_.isActive() ? interp_pose : last_sent_pose_;
-            // If trajectory just finished (not cancelled), interp_pose is end_pose
-            // which was set by the last step() call.
 
             // Write end pose into SHM command so streaming holds here
             {
@@ -324,79 +303,98 @@ void CartesianMotionForceControl::PeriodicCallback()
                 logger()->error("CartesianMotionForceControl: StreamCartesianMotionForce error: {}", e.what());
                 shm_->emergency_stop.store(true);
                 is_running_.store(false);
-                return;
+                send_error = true;
             }
-            return;
-        }
-
-        // NaN/Inf check on interpolated pose (should never happen with min-jerk, but safety first)
-        if (!CheckFinite(interp_pose)) {
+        } else if (!CheckFinite(interp_pose)) {
+            // NaN/Inf check
             logger()->error("{}", "CartesianMotionForceControl: NaN/Inf in trajectory pose");
             shm_->emergency_stop.store(true);
             is_running_.store(false);
             shm_->is_moving.store(false);
-            return;
+            send_error = true;
+        } else {
+            // Send interpolated command
+            try {
+                robot_.StreamCartesianMotionForce(
+                    interp_pose, {}, interp_velocity, {});
+            } catch (const std::exception& e) {
+                logger()->error("CartesianMotionForceControl: StreamCartesianMotionForce error: {}", e.what());
+                shm_->emergency_stop.store(true);
+                is_running_.store(false);
+                shm_->is_moving.store(false);
+                send_error = true;
+            }
+            if (!send_error) {
+                last_sent_pose_ = interp_pose;
+            }
         }
+    } else {
+        // --- STREAMING state ---
 
-        // Send interpolated command (skip jump check — min-jerk guarantees continuity)
-        try {
-            robot_.StreamCartesianMotionForce(
-                interp_pose, {}, interp_velocity, {});
-        } catch (const std::exception& e) {
-            logger()->error("CartesianMotionForceControl: StreamCartesianMotionForce error: {}", e.what());
+        // NaN/Inf check on pose
+        if (!CheckFinite(cmd.pose)) {
+            logger()->error("{}", "CartesianMotionForceControl: NaN/Inf in command pose");
             shm_->emergency_stop.store(true);
             is_running_.store(false);
-            shm_->is_moving.store(false);
-            return;
+            send_error = true;
         }
 
-        last_sent_pose_ = interp_pose;
-        return;
+        if (!send_error) {
+            // Jump check – position and rotation
+            //     Thresholds = max_velocity * cmd_interval → adapts to Python frequency
+            const double pos_jump_thresh = kMaxPositionVelocity * cmd_interval;
+            const double rot_jump_thresh = kMaxRotationVelocity * cmd_interval;
+            if (CheckCartesianJump(cmd.pose, last_sent_pose_,
+                                   pos_jump_thresh, rot_jump_thresh)) {
+                cmd.pose         = last_sent_pose_;
+                cmd.wrench       = {};
+                cmd.velocity     = {};
+                cmd.acceleration = {};
+            }
+
+            // Timeout – hold last pose, zero dynamics
+            if (timed_out) {
+                cmd.pose         = last_sent_pose_;
+                cmd.wrench       = {};
+                cmd.velocity     = {};
+                cmd.acceleration = {};
+            }
+
+            // Send command
+            try {
+                robot_.StreamCartesianMotionForce(
+                    cmd.pose, cmd.wrench, cmd.velocity, cmd.acceleration);
+            } catch (const std::exception& e) {
+                logger()->error("CartesianMotionForceControl: StreamCartesianMotionForce error: {}", e.what());
+                shm_->emergency_stop.store(true);
+                is_running_.store(false);
+                send_error = true;
+            }
+            if (!send_error) {
+                last_sent_pose_ = cmd.pose;
+            }
+        }
     }
 
-    // --- STREAMING state (existing logic) ---
-
-    // 4s. NaN/Inf check on pose
-    if (!CheckFinite(cmd.pose)) {
-        logger()->error("{}", "CartesianMotionForceControl: NaN/Inf in command pose");
-        shm_->emergency_stop.store(true);
-        is_running_.store(false);
-        return;
+    // 6. Refresh robot states AFTER command send (outside lock, non-critical).
+    //    robot_.states() is a potentially slow IPC call — doing it after the
+    //    send ensures the command meets the 1 ms deadline.
+    if (!send_error) {
+        try {
+            auto rs = robot_.states();
+            std::lock_guard<std::mutex> lock(shm_mutex_);
+            shm_->state_tcp_pose            = rs.tcp_pose;
+            shm_->state_tcp_vel             = rs.tcp_vel;
+            shm_->state_ext_wrench_in_tcp   = rs.ext_wrench_in_tcp;
+            shm_->state_ext_wrench_in_world = rs.ext_wrench_in_world;
+            shm_->state_ft_sensor_raw       = rs.ft_sensor_raw;
+            shm_->state_q                   = rs.q;
+            shm_->state_tau_ext             = rs.tau_ext;
+            shm_->state_sequence.fetch_add(1, std::memory_order_relaxed);
+        } catch (const std::exception& e) {
+            logger()->warn("CartesianMotionForceControl: states() read failed: {}", e.what());
+        }
     }
-
-    // 5s. Jump check – position and rotation
-    //     Thresholds = max_velocity * cmd_interval → adapts to Python frequency
-    const double pos_jump_thresh = kMaxPositionVelocity * cmd_interval;
-    const double rot_jump_thresh = kMaxRotationVelocity * cmd_interval;
-    if (CheckCartesianJump(cmd.pose, last_sent_pose_,
-                           pos_jump_thresh, rot_jump_thresh)) {
-        cmd.pose         = last_sent_pose_;
-        cmd.wrench       = {};
-        cmd.velocity     = {};
-        cmd.acceleration = {};
-    }
-
-    // 6s. Timeout – hold last pose, zero dynamics
-    if (timed_out) {
-        cmd.pose         = last_sent_pose_;
-        cmd.wrench       = {};
-        cmd.velocity     = {};
-        cmd.acceleration = {};
-    }
-
-    // 7s. Send command
-    try {
-        robot_.StreamCartesianMotionForce(
-            cmd.pose, cmd.wrench, cmd.velocity, cmd.acceleration);
-    } catch (const std::exception& e) {
-        logger()->error("CartesianMotionForceControl: StreamCartesianMotionForce error: {}", e.what());
-        shm_->emergency_stop.store(true);
-        is_running_.store(false);
-        return;
-    }
-
-    // 8s. Update last sent
-    last_sent_pose_ = cmd.pose;
 }
 
 } // namespace flexiv_bindings

@@ -400,13 +400,13 @@ public:
     bool is_running() const     { return ctrl_->isRunning(); }
 
     // --- Move-to-pose API ---
-    void move_to_pose(const py::list& pose_list, double duration_sec = 3.0) {
+    void move_to_pose(const py::list& pose_list, double duration_sec = 0.0) {
         auto pose = ListToArray<7>(pose_list);
         ctrl_->moveToPose(pose, duration_sec);
     }
 
     bool move_to_pose_sync(const py::list& pose_list,
-                           double duration_sec = 3.0,
+                           double duration_sec = 0.0,
                            double timeout_sec = 0.0) {
         auto pose = ListToArray<7>(pose_list);
         ctrl_->moveToPose(pose, duration_sec);
@@ -414,9 +414,12 @@ public:
         // Release GIL and poll isMoving() every 10 ms
         py::gil_scoped_release release;
 
+        // When duration is auto (<=0), use a generous fixed timeout.
+        // The trajectory auto-computes from distance, but we don't know
+        // the exact value here.  30s covers any reasonable reset motion.
         double effective_timeout = timeout_sec > 0.0
             ? timeout_sec
-            : duration_sec + 2.0;  // generous default: duration + 2s margin
+            : (duration_sec > 0.0 ? duration_sec + 2.0 : 30.0);
 
         auto deadline = std::chrono::steady_clock::now()
                       + std::chrono::duration<double>(effective_timeout);
@@ -554,13 +557,15 @@ PYBIND11_MODULE(_flexiv_bindings, m)
         .def("is_running",    &PyCartesianMotionForceControl::is_running)
         .def("move_to_pose",  &PyCartesianMotionForceControl::move_to_pose,
              py::arg("pose"),
-             py::arg("duration_sec") = 3.0,
-             "Start a min-jerk trajectory to target pose (non-blocking)")
+             py::arg("duration_sec") = 0.0,
+             "Start a min-jerk trajectory to target pose (non-blocking). "
+             "duration_sec=0 auto-computes from distance.")
         .def("move_to_pose_sync", &PyCartesianMotionForceControl::move_to_pose_sync,
              py::arg("pose"),
-             py::arg("duration_sec") = 3.0,
+             py::arg("duration_sec") = 0.0,
              py::arg("timeout_sec")  = 0.0,
-             "Move to target pose and block until complete (releases GIL)")
+             "Move to target pose and block until complete (releases GIL). "
+             "duration_sec=0 auto-computes from distance.")
         .def("is_moving",     &PyCartesianMotionForceControl::is_moving,
              "Whether a trajectory move is currently in progress")
         .def("cancel_move",   &PyCartesianMotionForceControl::cancel_move,
