@@ -20,7 +20,7 @@
 #include <vector>
 
 namespace py = pybind11;
-using namespace flexiv_bindings;
+using namespace flexiv_rt;
 using namespace flexiv::rdk;
 
 // ---------------------------------------------------------------------------
@@ -451,7 +451,7 @@ private:
 // ---------------------------------------------------------------------------
 // Module definition
 // ---------------------------------------------------------------------------
-PYBIND11_MODULE(_flexiv_bindings, m)
+PYBIND11_MODULE(_flexiv_rt, m)
 {
     m.doc() = "Python bindings for Flexiv RDK real-time control";
 

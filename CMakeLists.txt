@@ -22,13 +22,13 @@ endif()
 set(pybind11_DIR ${PYBIND11_CMAKE_DIR})
 find_package(pybind11 CONFIG REQUIRED)
 
-pybind11_add_module(_flexiv_bindings
-    src/flexiv_bindings.cpp
+pybind11_add_module(_flexiv_rt
+    src/flexiv_rt.cpp
     src/joint_impedance_control.cpp
     src/cartesian_control.cpp
 )
 
-target_include_directories(_flexiv_bindings PRIVATE include/)
+target_include_directories(_flexiv_rt PRIVATE include/)
 
 # Fix spdlog header version conflict:
 # The conda env's Python "spdlog" pip package installs stale C++ spdlog 1.10.0 headers
@@ -37,12 +37,12 @@ target_include_directories(_flexiv_bindings PRIVATE include/)
 # Force the RDK's bundled spdlog 1.14.1 headers to be searched first via BEFORE.
 set(_rdk_spdlog_inc "${CMAKE_CURRENT_SOURCE_DIR}/flexiv_rdk/thirdparty/scripts/spdlog/include")
 if(EXISTS "${_rdk_spdlog_inc}/spdlog/version.h")
-    target_include_directories(_flexiv_bindings BEFORE PRIVATE ${_rdk_spdlog_inc})
+    target_include_directories(_flexiv_rt BEFORE PRIVATE ${_rdk_spdlog_inc})
     message(STATUS "Using RDK spdlog headers: ${_rdk_spdlog_inc}")
 endif()
 
 # flexiv::flexiv_rdk transitively brings Eigen3, spdlog, fastrtps, fastcdr, Threads
-target_link_libraries(_flexiv_bindings PRIVATE flexiv::flexiv_rdk)
+target_link_libraries(_flexiv_rt PRIVATE flexiv::flexiv_rdk)
 
 # Intercept mlockall(): the Flexiv Scheduler constructor calls mlockall(MCL_CURRENT|
 # MCL_FUTURE) which pins ALL process virtual memory into physical RAM.  In a Python
@@ -50,11 +50,11 @@ target_link_libraries(_flexiv_bindings PRIVATE flexiv::flexiv_rdk)
 # --wrap redirects all calls to mlockall inside the linked static library to our
 # __wrap_mlockall (a no-op that returns 0).  The Scheduler still gets SCHED_FIFO
 # priority and semaphore — only the page-locking is skipped.
-target_link_options(_flexiv_bindings PRIVATE -Wl,--wrap=mlockall)
+target_link_options(_flexiv_rt PRIVATE -Wl,--wrap=mlockall)
 
-set_target_properties(_flexiv_bindings PROPERTIES
-    LIBRARY_OUTPUT_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/flexiv_bindings
-    OUTPUT_NAME "_flexiv_bindings"
+set_target_properties(_flexiv_rt PROPERTIES
+    LIBRARY_OUTPUT_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/flexiv_rt
+    OUTPUT_NAME "_flexiv_rt"
 )
 
 # Tests

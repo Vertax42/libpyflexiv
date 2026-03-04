@@ -1,7 +1,7 @@
 """
-flexiv_bindings
-===============
-Python bindings for Flexiv RDK real-time control.
+flexiv_rt
+=========
+Python real-time control bindings for Flexiv robots.
 
 Exposes:
     Robot                   – main robot interface
@@ -15,7 +15,7 @@ Exposes:
     RobotStates             – robot states struct
 """
 
-from ._flexiv_bindings import (
+from ._flexiv_rt import (
     Robot,
     JointImpedanceControl,
     CartesianMotionForceControl,
