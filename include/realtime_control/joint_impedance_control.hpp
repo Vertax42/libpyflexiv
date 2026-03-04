@@ -11,7 +11,7 @@
 #include <mutex>
 #include <vector>
 
-namespace flexiv_bindings {
+namespace flexiv_rt {
 
 struct JointCommand {
     std::vector<double> positions;     // [rad]
@@ -72,4 +72,4 @@ private:
     void PeriodicCallback();
 };
 
-} // namespace flexiv_bindings
+} // namespace flexiv_rt

@@ -2,7 +2,7 @@
 #include <array>
 #include <vector>
 
-namespace flexiv_bindings {
+namespace flexiv_rt {
 
 struct CartesianState {
     std::array<double,7> tcp_pose;
@@ -14,4 +14,4 @@ struct CartesianState {
     std::vector<double>  tau_ext;
 };
 
-} // namespace flexiv_bindings
+} // namespace flexiv_rt

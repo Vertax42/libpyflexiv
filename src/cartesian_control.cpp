@@ -15,11 +15,11 @@
 // and once in Start().  Both are intercepted and no-op'd here.
 // ---------------------------------------------------------------------------
 extern "C" int __wrap_mlockall(int flags) {
-    flexiv_bindings::logger()->info("mlockall(flags={}) intercepted — skipped (OOM prevention)", flags);
+    flexiv_rt::logger()->info("mlockall(flags={}) intercepted — skipped (OOM prevention)", flags);
     return 0;  // pretend success
 }
 
-namespace flexiv_bindings {
+namespace flexiv_rt {
 
 // ---------------------------------------------------------------------------
 // Common shared-memory initialisation (called by both constructors)
@@ -397,4 +397,4 @@ void CartesianMotionForceControl::PeriodicCallback()
     }
 }
 
-} // namespace flexiv_bindings
+} // namespace flexiv_rt

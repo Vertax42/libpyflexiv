@@ -8,7 +8,7 @@
 #include <thread>
 #include <vector>
 
-using namespace flexiv_bindings;
+using namespace flexiv_rt;
 
 // ============================================================================
 // QuatAngularDist

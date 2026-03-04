@@ -5,7 +5,7 @@
 #include <cmath>
 #include <vector>
 
-namespace flexiv_bindings {
+namespace flexiv_rt {
 
 // Safety thresholds — defined as maximum velocities.
 // The RT thread scales these by the actual Python command interval to get
@@ -74,4 +74,4 @@ inline bool CheckCartesianJump(const std::array<double, 7>& cmd,
     return false;
 }
 
-} // namespace flexiv_bindings
+} // namespace flexiv_rt

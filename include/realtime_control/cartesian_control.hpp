@@ -13,7 +13,7 @@
 #include <mutex>
 #include <vector>
 
-namespace flexiv_bindings {
+namespace flexiv_rt {
 
 // ---------------------------------------------------------------------------
 // RTCallbackProxy — registered with pre-started Scheduler, delegates to
@@ -142,4 +142,4 @@ private:
     void PeriodicCallback();
 };
 
-} // namespace flexiv_bindings
+} // namespace flexiv_rt

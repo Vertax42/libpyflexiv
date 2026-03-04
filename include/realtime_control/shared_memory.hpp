@@ -4,7 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 
-namespace flexiv_bindings {
+namespace flexiv_rt {
 
 constexpr size_t kCacheLineSize = 64;
 
@@ -56,4 +56,4 @@ struct RealTimeBuffer {
     }
 };
 
-} // namespace flexiv_bindings
+} // namespace flexiv_rt

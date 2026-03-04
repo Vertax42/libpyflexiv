@@ -5,7 +5,7 @@
 #include <cmath>
 #include <stdexcept>
 
-namespace flexiv_bindings {
+namespace flexiv_rt {
 
 JointImpedanceControl::JointImpedanceControl(
     flexiv::rdk::Robot& robot,
@@ -221,4 +221,4 @@ void JointImpedanceControl::PeriodicCallback()
     std::copy(rt_pos_.begin(), rt_pos_.end(), last_sent_pos_.begin());
 }
 
-} // namespace flexiv_bindings
+} // namespace flexiv_rt

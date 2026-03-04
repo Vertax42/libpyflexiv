@@ -3,7 +3,7 @@
 #include <cmath>
 #include <cstdint>
 
-namespace flexiv_bindings {
+namespace flexiv_rt {
 
 /// RT-safe minimum-jerk trajectory generator for 7D poses [x,y,z, qw,qx,qy,qz].
 ///
@@ -273,4 +273,4 @@ private:
     bool     cancelled_     = false;
 };
 
-} // namespace flexiv_bindings
+} // namespace flexiv_rt

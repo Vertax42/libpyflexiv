@@ -2,7 +2,7 @@
 #include <array>
 #include <vector>
 
-namespace flexiv_bindings {
+namespace flexiv_rt {
 
 struct JointState {
     std::vector<double>  q;        // joint positions [rad]
@@ -12,4 +12,4 @@ struct JointState {
     std::array<double,7> tcp_pose; // TCP pose (for convenience)
 };
 
-} // namespace flexiv_bindings
+} // namespace flexiv_rt

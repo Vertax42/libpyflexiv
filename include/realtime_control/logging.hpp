@@ -4,7 +4,7 @@
 #include <spdlog/spdlog.h>
 #include <spdlog/sinks/stdout_color_sinks.h>
 
-namespace flexiv_bindings {
+namespace flexiv_rt {
 
 /// Thread-safe singleton logger for libpyflexiv.
 /// Pattern: [YYYY-MM-DD HH:MM:SS] [libpyflexiv] [level] message
@@ -18,4 +18,4 @@ inline std::shared_ptr<spdlog::logger>& logger() {
     return instance;
 }
 
-} // namespace flexiv_bindings
+} // namespace flexiv_rt
