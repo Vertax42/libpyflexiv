@@ -9,7 +9,7 @@ __pycache__/
 *.pyc
 *.egg-info/
 
-# Flexiv RDK (third-party SDK, install separately — see README)
+# Flexiv RDK (third-party SDK — see README Step 1)
 flexiv_rdk/
 
 # Claude Code local config

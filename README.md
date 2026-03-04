@@ -45,9 +45,7 @@ Complete instructions from creating a fresh mamba environment to a working `impo
 - `sudo` access (installing system libraries to `/usr/local` and `/opt`, runtime SCHED_FIFO)
 - ROS 2 Humble (`ros-humble-ros-base`) — provides Fast-DDS / Fast-CDR required by Flexiv RDK
 
-### Step 0: Install Flexiv RDK System Dependencies
-
-The Flexiv RDK statically links against **Eigen 3.4**, **spdlog 1.14.1**, and **Fast-DDS 2.6.10** (from ROS 2 Humble). Install them once on the host system — these are C++ libraries and should NOT come from the conda environment.
+### Step 0: System Dependencies
 
 ```bash
 # Eigen3 (Ubuntu package is 3.4.0, matches RDK)
@@ -56,35 +54,33 @@ sudo apt install libeigen3-dev
 # ROS 2 Humble (provides Fast-DDS, Fast-CDR, foonathan_memory)
 # Follow https://docs.ros.org/en/humble/Installation.html, then:
 sudo apt install ros-humble-ros-base
-
-# spdlog 1.14.1 — must match the version Flexiv RDK was compiled against.
-# The conda env ships a different spdlog version; we install the correct
-# one to /usr/local so the RDK build finds it.
-cd /path/to/libpyflexiv/flexiv_rdk/thirdparty/scripts
-bash install_spdlog.sh          # clones spdlog v1.14.1, builds, installs to /usr/local
 ```
 
-After this step you should have:
-- `/usr/local/include/spdlog/version.h` → 1.14.1
-- `/usr/local/lib/libspdlog.a`
-- `/opt/ros/humble/include/fastrtps/`, `/opt/ros/humble/include/fastcdr/`
-
-### Step 1: Install Flexiv RDK
-
-Build and install the Flexiv RDK SDK to `/opt/flexiv_rdk`. This downloads the prebuilt static library from GitHub and installs headers + cmake config.
+### Step 1: Clone and Install Flexiv RDK
 
 ```bash
-# Source ROS 2 so cmake can find Fast-DDS / Fast-CDR
-source /opt/ros/humble/setup.bash
+cd /path/to/libpyflexiv
+git clone https://github.com/flexivrobotics/flexiv_rdk.git
+cd flexiv_rdk
+git checkout v1.8.0
 
-cd /path/to/libpyflexiv/flexiv_rdk
+# Install spdlog 1.14.1 (must match the version RDK was compiled against).
+# The conda env ships a different version; we install the correct one to /usr/local.
+cd thirdparty/scripts
+bash install_spdlog.sh          # clones spdlog v1.14.1, builds, installs to /usr/local
+cd ../..
+
+# Build and install RDK to /opt/flexiv_rdk
+source /opt/ros/humble/setup.bash
 mkdir -p build && cd build
 cmake .. -DCMAKE_INSTALL_PREFIX=/opt/flexiv_rdk
 make -j$(nproc)
 sudo make install
 ```
 
-Verify: `ls /opt/flexiv_rdk/include/flexiv/rdk/robot.hpp` should exist.
+Verify:
+- `ls /opt/flexiv_rdk/include/flexiv/rdk/robot.hpp` should exist
+- `/usr/local/include/spdlog/version.h` → 1.14.1
 
 ### Step 2: Create Mamba Environment
 
