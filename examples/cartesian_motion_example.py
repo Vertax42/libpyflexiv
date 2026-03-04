@@ -1,7 +1,7 @@
 """
 cartesian_motion_example.py
 ---------------------------
-Demonstrates real-time Cartesian pure motion control with flexiv_bindings.
+Demonstrates real-time Cartesian pure motion control with flexiv_rt.
 The robot holds its current TCP pose, then performs a small linear
 sine-sweep along the Y axis.
 
@@ -14,7 +14,7 @@ import sys
 import math
 import time
 import logging
-import flexiv_bindings as fb
+import flexiv_rt as frt
 
 logging.basicConfig(
     level=logging.INFO,
@@ -37,7 +37,7 @@ def main():
     robot_sn = sys.argv[1]
 
     # Connect and enable robot
-    with fb.Robot(robot_sn, connect_retries=10, retry_interval_sec=1.0) as robot:
+    with frt.Robot(robot_sn, connect_retries=10, retry_interval_sec=1.0) as robot:
         if robot.fault():
             print("Fault detected, clearing ...")
             if not robot.ClearFault(timeout_sec=30):
@@ -49,20 +49,20 @@ def main():
         log.info("Robot operational")
 
         # Move to home pose
-        robot.SwitchMode(fb.Mode.NRT_PLAN_EXECUTION)
+        robot.SwitchMode(frt.Mode.NRT_PLAN_EXECUTION)
         robot.ExecutePlan("PLAN-Home")
         while robot.busy():
             time.sleep(1.0)
         log.info("Home pose reached")
 
         # Zero the F/T sensor before Cartesian control
-        robot.SwitchMode(fb.Mode.NRT_PRIMITIVE_EXECUTION)
+        robot.SwitchMode(frt.Mode.NRT_PRIMITIVE_EXECUTION)
         robot.ExecutePrimitive("ZeroFTSensor", {})
         log.info("Zeroing F/T sensor – keep robot free of contact ...")
         time.sleep(3.0)  # Allow zeroing to complete
 
         # Switch to RT Cartesian motion-force mode
-        robot.SwitchMode(fb.Mode.RT_CARTESIAN_MOTION_FORCE)
+        robot.SwitchMode(frt.Mode.RT_CARTESIAN_MOTION_FORCE)
 
         # Pure motion control – all axes motion-controlled, none force-controlled
         robot.SetForceControlAxis([False, False, False, False, False, False])

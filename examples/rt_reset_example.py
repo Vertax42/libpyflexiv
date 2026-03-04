@@ -21,7 +21,7 @@ import math
 import time
 import logging
 
-import flexiv_bindings as fb
+import flexiv_rt as frt
 
 logging.basicConfig(
     level=logging.INFO,
@@ -48,7 +48,7 @@ def main():
 
     # ── 1. Connect & Enable ──────────────────────────────────────────────
     log.info(f"Connecting to {robot_sn} ...")
-    robot = fb.Robot(robot_sn, connect_retries=10, retry_interval_sec=1.0)
+    robot = frt.Robot(robot_sn, connect_retries=10, retry_interval_sec=1.0)
 
     if robot.fault():
         log.warning("Fault detected, clearing ...")
@@ -61,7 +61,7 @@ def main():
     log.info("Robot operational")
 
     # ── 2. Go to home (NRT) ──────────────────────────────────────────────
-    robot.SwitchMode(fb.Mode.NRT_PLAN_EXECUTION)
+    robot.SwitchMode(frt.Mode.NRT_PLAN_EXECUTION)
     robot.ExecutePlan("PLAN-Home")
     while robot.busy():
         time.sleep(0.1)
@@ -72,7 +72,7 @@ def main():
     log.info(f"Start TCP pose cached: [{', '.join(f'{v:.4f}' for v in start_tcp_pose)}]")
 
     # ── 3. Switch to RT Cartesian mode ───────────────────────────────────
-    robot.SwitchMode(fb.Mode.RT_CARTESIAN_MOTION_FORCE)
+    robot.SwitchMode(frt.Mode.RT_CARTESIAN_MOTION_FORCE)
     robot.SetForceControlAxis([False] * 6)  # pure motion, no force control
 
     init_pose = list(robot.states().tcp_pose)
@@ -197,7 +197,7 @@ def main():
 
         # Return to home (NRT) before shutting down
         try:
-            robot.SwitchMode(fb.Mode.NRT_PLAN_EXECUTION)
+            robot.SwitchMode(frt.Mode.NRT_PLAN_EXECUTION)
             robot.ExecutePlan("PLAN-Home")
             while robot.busy():
                 time.sleep(0.1)

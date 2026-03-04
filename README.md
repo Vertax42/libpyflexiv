@@ -36,7 +36,7 @@ Python (non-RT, ~100 Hz)              C++ RT thread (SCHED_FIFO, 1 kHz)
 
 ## Build & Install
 
-Complete instructions from creating a fresh mamba environment to a working `import flexiv_bindings`.
+Complete instructions from creating a fresh mamba environment to a working `import flexiv_rt`.
 
 ### Prerequisites
 
@@ -117,7 +117,7 @@ cmake .. \
 make -j$(nproc)
 ```
 
-This produces `flexiv_bindings/_flexiv_bindings.cpython-310-x86_64-linux-gnu.so` in the project root.
+This produces `flexiv_rt/_flexiv_rt.cpython-310-x86_64-linux-gnu.so` in the project root.
 
 > **Troubleshooting**: If you see spdlog errors like `is_convertible_to_basic_format_string` or `basic_runtime is not a member of fmt`, it means cmake found a wrong spdlog. Ensure `CMAKE_PREFIX_PATH` does NOT include the conda env, and that spdlog 1.14.1 is installed at `/usr/local`.
 
@@ -132,7 +132,7 @@ mamba run -n lerobot-xense pip install -e /path/to/libpyflexiv
 Verify:
 
 ```bash
-mamba run -n lerobot-xense python -c "import flexiv_bindings; print('OK')"
+mamba run -n lerobot-xense python -c "import flexiv_rt; print('OK')"
 ```
 
 ### Running (requires `sudo` for SCHED_FIFO)
@@ -153,7 +153,7 @@ sudo -E env PATH=$PATH \
 ### Joint Impedance Control
 
 ```python
-from flexiv_bindings import Robot, Mode
+from flexiv_rt import Robot, Mode
 
 robot = Robot("Rizon4s-XXXXXX")
 robot.Enable()
@@ -486,12 +486,12 @@ libpyflexiv/
 │   ├── cartesian_control.hpp       #   Cartesian RT controller declaration
 │   └── trajectory.hpp              #   Min-jerk trajectory generator
 ├── src/                            # C++ implementation
-│   ├── flexiv_bindings.cpp         #   Pybind11 module (Robot, controls, enums)
+│   ├── flexiv_rt.cpp               #   Pybind11 module (Robot, controls, enums)
 │   ├── joint_impedance_control.cpp #   Joint RT callback implementation
 │   └── cartesian_control.cpp       #   Cartesian RT callback + mlockall wrap
-├── flexiv_bindings/                # Python package
+├── flexiv_rt/                      # Python package
 │   ├── __init__.py                 #   Re-exports from compiled .so
-│   └── _flexiv_bindings.*.so       #   Compiled pybind11 module
+│   └── _flexiv_rt.*.so             #   Compiled pybind11 module
 ├── examples/
 │   ├── joint_impedance_example.py  #   Joint sine-sweep demo
 │   ├── cartesian_motion_example.py #   Cartesian Y-axis sine demo

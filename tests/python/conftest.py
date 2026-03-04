@@ -8,7 +8,7 @@ Usage:
 import time
 import pytest
 
-import flexiv_bindings as fb
+import flexiv_rt as frt
 
 
 def pytest_addoption(parser):
@@ -28,7 +28,7 @@ def robot_sn(request):
 @pytest.fixture(scope="session")
 def robot(robot_sn):
     """Session-scoped robot: connect → ClearFault → Enable → Home → yield → Stop."""
-    r = fb.Robot(robot_sn)
+    r = frt.Robot(robot_sn)
 
     # Wait for connection
     for _ in range(50):
@@ -52,7 +52,7 @@ def robot(robot_sn):
     assert r.operational(), "Robot did not become operational"
 
     # Home via primitive
-    r.SwitchMode(fb.Mode.NRT_PRIMITIVE_EXECUTION)
+    r.SwitchMode(frt.Mode.NRT_PRIMITIVE_EXECUTION)
     time.sleep(0.5)
     r.ExecutePrimitive("Home", {})
     # Wait for homing to complete (robot becomes idle / not busy)

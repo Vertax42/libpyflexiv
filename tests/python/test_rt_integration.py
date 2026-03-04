@@ -10,7 +10,7 @@ import time
 
 import pytest
 
-import flexiv_bindings as fb
+import flexiv_rt as frt
 
 
 # ===========================================================================
@@ -49,15 +49,15 @@ class TestConnection:
 class TestModeSwitching:
     def test_mode_switch_joint(self, ensure_no_fault):
         robot = ensure_no_fault
-        robot.SwitchMode(fb.Mode.RT_JOINT_IMPEDANCE)
+        robot.SwitchMode(frt.Mode.RT_JOINT_IMPEDANCE)
         time.sleep(0.5)
-        assert robot.mode() == fb.Mode.RT_JOINT_IMPEDANCE
+        assert robot.mode() == frt.Mode.RT_JOINT_IMPEDANCE
 
     def test_mode_switch_cart(self, ensure_no_fault):
         robot = ensure_no_fault
-        robot.SwitchMode(fb.Mode.RT_CARTESIAN_MOTION_FORCE)
+        robot.SwitchMode(frt.Mode.RT_CARTESIAN_MOTION_FORCE)
         time.sleep(0.5)
-        assert robot.mode() == fb.Mode.RT_CARTESIAN_MOTION_FORCE
+        assert robot.mode() == frt.Mode.RT_CARTESIAN_MOTION_FORCE
 
 
 # ===========================================================================
@@ -69,7 +69,7 @@ class TestJointImpedance:
     def test_joint_hold(self, ensure_no_fault):
         """Start RT joint control and hold initial position for 2s."""
         robot = ensure_no_fault
-        robot.SwitchMode(fb.Mode.RT_JOINT_IMPEDANCE)
+        robot.SwitchMode(frt.Mode.RT_JOINT_IMPEDANCE)
         time.sleep(0.5)
 
         with robot.start_joint_impedance_control() as jc:
@@ -92,7 +92,7 @@ class TestJointImpedance:
     def test_joint_small_motion(self, ensure_no_fault):
         """Move joint[3] with a small sinusoidal motion."""
         robot = ensure_no_fault
-        robot.SwitchMode(fb.Mode.RT_JOINT_IMPEDANCE)
+        robot.SwitchMode(frt.Mode.RT_JOINT_IMPEDANCE)
         time.sleep(0.5)
 
         with robot.start_joint_impedance_control() as jc:
@@ -120,7 +120,7 @@ class TestJointImpedance:
     def test_joint_state_fields(self, ensure_no_fault):
         """Verify JointState fields are populated correctly."""
         robot = ensure_no_fault
-        robot.SwitchMode(fb.Mode.RT_JOINT_IMPEDANCE)
+        robot.SwitchMode(frt.Mode.RT_JOINT_IMPEDANCE)
         time.sleep(0.5)
 
         with robot.start_joint_impedance_control() as jc:
@@ -156,7 +156,7 @@ class TestCartesian:
     def test_cartesian_hold(self, ensure_no_fault):
         """Start RT Cartesian control and hold initial pose for 2s."""
         robot = ensure_no_fault
-        robot.SwitchMode(fb.Mode.RT_CARTESIAN_MOTION_FORCE)
+        robot.SwitchMode(frt.Mode.RT_CARTESIAN_MOTION_FORCE)
         time.sleep(0.5)
         robot.SetForceControlAxis([False] * 6)
 
@@ -180,7 +180,7 @@ class TestCartesian:
     def test_cartesian_small(self, ensure_no_fault):
         """Move TCP along Y axis with a small sinusoidal motion."""
         robot = ensure_no_fault
-        robot.SwitchMode(fb.Mode.RT_CARTESIAN_MOTION_FORCE)
+        robot.SwitchMode(frt.Mode.RT_CARTESIAN_MOTION_FORCE)
         time.sleep(0.5)
         robot.SetForceControlAxis([False] * 6)
 
@@ -213,7 +213,7 @@ class TestCartesian:
     def test_cartesian_state(self, ensure_no_fault):
         """Verify CartesianState fields are populated correctly."""
         robot = ensure_no_fault
-        robot.SwitchMode(fb.Mode.RT_CARTESIAN_MOTION_FORCE)
+        robot.SwitchMode(frt.Mode.RT_CARTESIAN_MOTION_FORCE)
         time.sleep(0.5)
         robot.SetForceControlAxis([False] * 6)
 
@@ -245,7 +245,7 @@ class TestSafety:
     def test_emergency_stop(self, ensure_no_fault):
         """Trigger e-stop and verify RT loop stops."""
         robot = ensure_no_fault
-        robot.SwitchMode(fb.Mode.RT_JOINT_IMPEDANCE)
+        robot.SwitchMode(frt.Mode.RT_JOINT_IMPEDANCE)
         time.sleep(0.5)
 
         with robot.start_joint_impedance_control() as jc:
@@ -262,7 +262,7 @@ class TestSafety:
     def test_context_manager(self, ensure_no_fault):
         """Verify context manager cleans up without fault."""
         robot = ensure_no_fault
-        robot.SwitchMode(fb.Mode.RT_JOINT_IMPEDANCE)
+        robot.SwitchMode(frt.Mode.RT_JOINT_IMPEDANCE)
         time.sleep(0.5)
 
         with robot.start_joint_impedance_control() as jc:
@@ -278,7 +278,7 @@ class TestSafety:
     def test_command_timeout(self, ensure_no_fault):
         """Send one command then sleep — robot should hold, no fault."""
         robot = ensure_no_fault
-        robot.SwitchMode(fb.Mode.RT_JOINT_IMPEDANCE)
+        robot.SwitchMode(frt.Mode.RT_JOINT_IMPEDANCE)
         time.sleep(0.5)
 
         with robot.start_joint_impedance_control() as jc:
@@ -305,7 +305,7 @@ class TestLeRobotCompatibility:
     def test_lerobot_joint_workflow(self, ensure_no_fault):
         """Simulate lerobot 100-step joint control loop."""
         robot = ensure_no_fault
-        robot.SwitchMode(fb.Mode.RT_JOINT_IMPEDANCE)
+        robot.SwitchMode(frt.Mode.RT_JOINT_IMPEDANCE)
         time.sleep(0.5)
 
         init_q = list(robot.states().q)
@@ -329,7 +329,7 @@ class TestLeRobotCompatibility:
     def test_lerobot_cartesian_workflow(self, ensure_no_fault):
         """Simulate lerobot 100-step Cartesian control loop."""
         robot = ensure_no_fault
-        robot.SwitchMode(fb.Mode.RT_CARTESIAN_MOTION_FORCE)
+        robot.SwitchMode(frt.Mode.RT_CARTESIAN_MOTION_FORCE)
         time.sleep(0.5)
         robot.SetForceControlAxis([False] * 6)
 

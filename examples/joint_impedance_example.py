@@ -1,7 +1,7 @@
 """
 joint_impedance_example.py
 --------------------------
-Demonstrates real-time joint impedance control with flexiv_bindings.
+Demonstrates real-time joint impedance control with flexiv_rt.
 The robot holds its current joint positions, then performs a small
 sine-sweep on all joints.
 
@@ -13,7 +13,7 @@ Usage:
 import sys
 import math
 import time
-import flexiv_bindings as fb
+import flexiv_rt as frt
 
 # Sine-sweep parameters
 SINE_AMP  = 0.05    # rad
@@ -30,7 +30,7 @@ def main():
     robot_sn = sys.argv[1]
 
     # Connect and enable robot
-    with fb.Robot(robot_sn, connect_retries=10, retry_interval_sec=1.0) as robot:
+    with frt.Robot(robot_sn, connect_retries=10, retry_interval_sec=1.0) as robot:
         if robot.fault():
             print("Fault detected, clearing ...")
             if not robot.ClearFault(timeout_sec=30):
@@ -42,14 +42,14 @@ def main():
         print("Robot operational")
 
         # Move to home pose (NRT plan execution)
-        robot.SwitchMode(fb.Mode.NRT_PLAN_EXECUTION)
+        robot.SwitchMode(frt.Mode.NRT_PLAN_EXECUTION)
         robot.ExecutePlan("PLAN-Home")
         while robot.busy():
             time.sleep(1.0)
         print("Home pose reached")
 
         # Switch to RT joint impedance mode
-        robot.SwitchMode(fb.Mode.RT_JOINT_IMPEDANCE)
+        robot.SwitchMode(frt.Mode.RT_JOINT_IMPEDANCE)
         robot.SetJointImpedance(robot.info().K_q_nom)
 
         init_q = list(robot.states().q)
