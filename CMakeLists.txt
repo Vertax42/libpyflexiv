@@ -1,0 +1,65 @@
+cmake_minimum_required(VERSION 3.16.3)
+project(libpyflexiv VERSION 0.1.0)
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+# Find flexiv_rdk
+find_package(flexiv_rdk REQUIRED
+    PATHS /opt/flexiv_rdk/lib/cmake/flexiv_rdk)
+
+# Find Python and pybind11
+find_package(Python3 COMPONENTS Interpreter Development REQUIRED)
+execute_process(
+    COMMAND ${Python3_EXECUTABLE} -c
+        "import pybind11; print(pybind11.get_cmake_dir())"
+    OUTPUT_VARIABLE PYBIND11_CMAKE_DIR
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    RESULT_VARIABLE _pybind11_result
+)
+if(NOT _pybind11_result EQUAL 0)
+    message(FATAL_ERROR "Could not find pybind11. Install it with: pip install pybind11")
+endif()
+set(pybind11_DIR ${PYBIND11_CMAKE_DIR})
+find_package(pybind11 CONFIG REQUIRED)
+
+pybind11_add_module(_flexiv_bindings
+    src/flexiv_bindings.cpp
+    src/joint_impedance_control.cpp
+    src/cartesian_control.cpp
+)
+
+target_include_directories(_flexiv_bindings PRIVATE include/)
+
+# Fix spdlog header version conflict:
+# The conda env's Python "spdlog" pip package installs stale C++ spdlog 1.10.0 headers
+# into include/python3.10/spdlog/. pybind11 adds -isystem <python-include-dir> early,
+# so those stale headers shadow the correct spdlog (1.14.1 from the RDK).
+# Force the RDK's bundled spdlog 1.14.1 headers to be searched first via BEFORE.
+set(_rdk_spdlog_inc "${CMAKE_CURRENT_SOURCE_DIR}/flexiv_rdk/thirdparty/scripts/spdlog/include")
+if(EXISTS "${_rdk_spdlog_inc}/spdlog/version.h")
+    target_include_directories(_flexiv_bindings BEFORE PRIVATE ${_rdk_spdlog_inc})
+    message(STATUS "Using RDK spdlog headers: ${_rdk_spdlog_inc}")
+endif()
+
+# flexiv::flexiv_rdk transitively brings Eigen3, spdlog, fastrtps, fastcdr, Threads
+target_link_libraries(_flexiv_bindings PRIVATE flexiv::flexiv_rdk)
+
+# Intercept mlockall(): the Flexiv Scheduler constructor calls mlockall(MCL_CURRENT|
+# MCL_FUTURE) which pins ALL process virtual memory into physical RAM.  In a Python
+# process with PyTorch/numpy this can be 10+ GB and triggers the OOM killer.
+# --wrap redirects all calls to mlockall inside the linked static library to our
+# __wrap_mlockall (a no-op that returns 0).  The Scheduler still gets SCHED_FIFO
+# priority and semaphore — only the page-locking is skipped.
+target_link_options(_flexiv_bindings PRIVATE -Wl,--wrap=mlockall)
+
+set_target_properties(_flexiv_bindings PROPERTIES
+    LIBRARY_OUTPUT_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/flexiv_bindings
+    OUTPUT_NAME "_flexiv_bindings"
+)
+
+# Tests
+option(BUILD_TESTS "Build C++ unit tests" OFF)
+if(BUILD_TESTS)
+    enable_testing()
+    add_subdirectory(tests/cpp)
+endif()

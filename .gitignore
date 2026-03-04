@@ -1,0 +1,16 @@
+# Build artifacts
+build/
+*.o
+*.so
+*.dylib
+
+# Python
+__pycache__/
+*.pyc
+*.egg-info/
+
+# Flexiv RDK (third-party SDK, install separately — see README)
+flexiv_rdk/
+
+# Claude Code local config
+.claude/
