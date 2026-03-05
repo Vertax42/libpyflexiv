@@ -1,6 +1,6 @@
 # libpyflexiv
 
-Python real-time control bindings for Flexiv robots (Rizon 4/4s/10/10s), built on [Flexiv RDK v1.8](https://github.com/flexivrobotics/flexiv_rdk) and [pybind11](https://github.com/pybind/pybind11).
+Python real-time control bindings for Flexiv robots (Rizon 4/4s/10/10s), built on [Flexiv RDK v1.9](https://github.com/flexivrobotics/flexiv_rdk) and [pybind11](https://github.com/pybind/pybind11).
 
 ## Why This Project Exists
 
@@ -42,45 +42,47 @@ Complete instructions from creating a fresh mamba environment to a working `impo
 
 - Ubuntu 22.04 x86_64
 - [Mamba](https://mamba.readthedocs.io/) (or conda)
-- `sudo` access (installing system libraries to `/usr/local` and `/opt`, runtime SCHED_FIFO)
-- ROS 2 Humble (`ros-humble-ros-base`) — provides Fast-DDS / Fast-CDR required by Flexiv RDK
+- `sudo` access (runtime SCHED_FIFO only)
+- Standard build tools: `sudo apt install build-essential cmake git`
 
 ### Step 0: System Dependencies
 
 ```bash
-# Eigen3 (Ubuntu package is 3.4.0, matches RDK)
-sudo apt install libeigen3-dev
-
-# ROS 2 Humble (provides Fast-DDS, Fast-CDR, foonathan_memory)
-# Follow https://docs.ros.org/en/humble/Installation.html, then:
-sudo apt install ros-humble-ros-base
+sudo apt install build-essential cmake git
 ```
 
-### Step 1: Clone and Install Flexiv RDK
+No ROS 2 required — all C++ dependencies (Eigen, spdlog, Fast-DDS, Fast-CDR, RBDyn, etc.) are built from source by the provided script in Step 1.
+
+### Step 1: Install Flexiv RDK and All Dependencies
+
+The `flexiv_rdk` SDK is already included as a submodule. First, build and install all its C++ dependencies to `~/rdk_install`, then build and install the RDK itself.
 
 ```bash
 cd /path/to/libpyflexiv
-git clone https://github.com/flexivrobotics/flexiv_rdk.git
-cd flexiv_rdk
-git checkout v1.8.0
 
-# Install spdlog 1.14.1 (must match the version RDK was compiled against).
-# The conda env ships a different version; we install the correct one to /usr/local.
-cd thirdparty/scripts
-bash install_spdlog.sh          # clones spdlog v1.14.1, builds, installs to /usr/local
-cd ../..
+# Step 1a: Build and install all C++ dependencies from source
+# (Eigen, spdlog, tinyxml2, yaml-cpp, foonathan_memory,
+#  Fast-CDR, Fast-DDS, Boost, SpaceVecAlg, RBDyn)
+cd flexiv_rdk/thirdparty
+bash build_and_install_dependencies.sh ~/rdk_install $(nproc)
 
-# Build and install RDK to /opt/flexiv_rdk
-source /opt/ros/humble/setup.bash
+# Step 1b: Build and install flexiv_rdk itself
+cd /path/to/libpyflexiv/flexiv_rdk
 mkdir -p build && cd build
-cmake .. -DCMAKE_INSTALL_PREFIX=/opt/flexiv_rdk
-make -j$(nproc)
-sudo make install
+cmake .. \
+  -DCMAKE_INSTALL_PREFIX=~/rdk_install \
+  -DCMAKE_PREFIX_PATH=~/rdk_install \
+  -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+cmake --build . --target install --config Release -j$(nproc)
 ```
 
+> **Note**: No `sudo` needed — everything installs to your home directory.
+> The RDK static library (`libflexiv_rdk.x86_64-linux-gnu.a`) is automatically downloaded
+> from GitHub during the cmake configure step.
+
 Verify:
-- `ls /opt/flexiv_rdk/include/flexiv/rdk/robot.hpp` should exist
-- `/usr/local/include/spdlog/version.h` → 1.14.1
+- `ls ~/rdk_install/include/flexiv/rdk/robot.hpp` should exist
+- `ls ~/rdk_install/lib/cmake/flexiv_rdk/flexiv_rdk-config.cmake` should exist
 
 ### Step 2: Create Mamba Environment
 
@@ -101,25 +103,25 @@ pip install pybind11
 
 Point CMake at the Flexiv RDK install prefix and at your conda Python interpreter.
 
-**Important**: Only pass `/opt/flexiv_rdk` as `CMAKE_PREFIX_PATH` — do NOT include the conda env prefix. The conda env contains a different spdlog version that will cause header conflicts.
+**Important**: Only pass `~/rdk_install` as `CMAKE_PREFIX_PATH` — do NOT include the conda env prefix. The conda env contains a different spdlog version that will cause header conflicts.
 
 ```bash
-# Source ROS 2 (for Fast-DDS cmake files)
-source /opt/ros/humble/setup.bash
+mamba activate lerobot-xense
 
 cd /path/to/libpyflexiv
 mkdir -p build && cd build
 
 cmake .. \
-  -DCMAKE_PREFIX_PATH=/opt/flexiv_rdk \
-  -DPython3_EXECUTABLE=$(mamba run -n lerobot-xense which python)
+  -DCMAKE_PREFIX_PATH=~/rdk_install \
+  -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
+  -DPython3_EXECUTABLE=$(which python)
 
 make -j$(nproc)
 ```
 
 This produces `flexiv_rt/_flexiv_rt.cpython-310-x86_64-linux-gnu.so` in the project root.
 
-> **Troubleshooting**: If you see spdlog errors like `is_convertible_to_basic_format_string` or `basic_runtime is not a member of fmt`, it means cmake found a wrong spdlog. Ensure `CMAKE_PREFIX_PATH` does NOT include the conda env, and that spdlog 1.14.1 is installed at `/usr/local`.
+> **Troubleshooting**: If you see spdlog errors like `is_convertible_to_basic_format_string` or `basic_runtime is not a member of fmt`, it means cmake found a wrong spdlog. Ensure `CMAKE_PREFIX_PATH` is set to `~/rdk_install` and does NOT include the conda env prefix.
 
 ### Step 4: Install Python Package
 

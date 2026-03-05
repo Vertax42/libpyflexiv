@@ -3,9 +3,8 @@ project(libpyflexiv VERSION 0.1.0)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# Find flexiv_rdk
-find_package(flexiv_rdk REQUIRED
-    PATHS /opt/flexiv_rdk/lib/cmake/flexiv_rdk)
+# Find flexiv_rdk (resolved via CMAKE_PREFIX_PATH, e.g. ~/rdk_install)
+find_package(flexiv_rdk REQUIRED)
 
 # Find Python and pybind11
 find_package(Python3 COMPONENTS Interpreter Development REQUIRED)
