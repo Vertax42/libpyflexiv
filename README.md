@@ -123,6 +123,25 @@ This produces `flexiv_rt/_flexiv_rt.cpython-310-x86_64-linux-gnu.so` in the proj
 
 > **Troubleshooting**: If you see spdlog errors like `is_convertible_to_basic_format_string` or `basic_runtime is not a member of fmt`, it means cmake found a wrong spdlog. Ensure `CMAKE_PREFIX_PATH` is set to `~/rdk_install` and does NOT include the conda env prefix.
 
+> **Troubleshooting (`ImportError: undefined symbol ... fmt::v8::detail::error_handler::on_error`)**:
+> This means the extension was built against one fmt/spdlog ABI but loaded with another.
+> Check linkage:
+> ```bash
+> so=flexiv_rt/_flexiv_rt.cpython-310-x86_64-linux-gnu.so
+> readelf -d "$so" | egrep 'NEEDED|RPATH|RUNPATH'
+> ldd "$so" | egrep 'spdlog|fmt'
+> nm -D "$so" | c++filt | grep 'fmt::v8::detail::error_handler::on_error'
+> ```
+> Rebuild from scratch with only `~/rdk_install` in `CMAKE_PREFIX_PATH`:
+> ```bash
+> rm -rf build flexiv_rt/_flexiv_rt*.so
+> cmake -S . -B build \
+>   -DCMAKE_PREFIX_PATH=~/rdk_install \
+>   -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
+>   -DPython3_EXECUTABLE=$(which python)
+> cmake --build build -j$(nproc)
+> ```
+
 ### Step 4: Install Python Package
 
 Editable install — the compiled `.so` is already in place:

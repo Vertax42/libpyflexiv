@@ -29,6 +29,27 @@ pybind11_add_module(_flexiv_rt
 
 target_include_directories(_flexiv_rt PRIVATE include/)
 
+# Some spdlog builds use external fmt (SPDLOG_FMT_EXTERNAL) but don't
+# consistently propagate fmt on all downstream link lines. Explicitly link
+# fmt when that compile mode is active to avoid runtime undefined fmt symbols.
+if(TARGET spdlog::spdlog)
+    get_target_property(_spdlog_defs spdlog::spdlog INTERFACE_COMPILE_DEFINITIONS)
+    if(_spdlog_defs)
+        string(REPLACE ";" " " _spdlog_defs_str "${_spdlog_defs}")
+        if(_spdlog_defs_str MATCHES "(^| )SPDLOG_FMT_EXTERNAL($| )")
+            if(TARGET fmt::fmt)
+                target_link_libraries(_flexiv_rt PRIVATE fmt::fmt)
+                message(STATUS "spdlog uses external fmt; linking fmt::fmt explicitly")
+            else()
+                message(FATAL_ERROR
+                    "spdlog::spdlog is configured with SPDLOG_FMT_EXTERNAL, but fmt::fmt is missing. "
+                    "Set CMAKE_PREFIX_PATH to a prefix containing matching spdlog+fmt (e.g. ~/rdk_install)."
+                )
+            endif()
+        endif()
+    endif()
+endif()
+
 # Fix spdlog header version conflict:
 # The conda env's Python "spdlog" pip package installs stale C++ spdlog 1.10.0 headers
 # into include/python3.10/spdlog/. pybind11 adds -isystem <python-include-dir> early,
