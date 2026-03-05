@@ -63,6 +63,8 @@ cd /path/to/libpyflexiv
 # Step 1a: Build and install all C++ dependencies from source
 # (Eigen, spdlog, tinyxml2, yaml-cpp, foonathan_memory,
 #  Fast-CDR, Fast-DDS, Boost, SpaceVecAlg, RBDyn)
+git clone https://github.com/flexivrobotics/flexiv_rdk.git
+git checkout v1.8
 cd flexiv_rdk/thirdparty
 bash build_and_install_dependencies.sh ~/rdk_install $(nproc)
 
@@ -71,8 +73,7 @@ cd /path/to/libpyflexiv/flexiv_rdk
 mkdir -p build && cd build
 cmake .. \
   -DCMAKE_INSTALL_PREFIX=~/rdk_install \
-  -DCMAKE_PREFIX_PATH=~/rdk_install \
-  -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+  -DCMAKE_PREFIX_PATH=~/rdk_install
 cmake --build . --target install --config Release -j$(nproc)
 ```
 

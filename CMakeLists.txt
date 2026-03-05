@@ -29,6 +29,18 @@ pybind11_add_module(_flexiv_rt
 
 target_include_directories(_flexiv_rt PRIVATE include/)
 
+# Ensure we always compile against the same spdlog headers as the linked
+# spdlog library. In conda envs, pybind11 often injects Python include dirs
+# early, and some envs contain stale C++ spdlog headers under python include.
+# Prepending spdlog::spdlog include dirs avoids ABI mismatches (fmt v8/v10).
+if(TARGET spdlog::spdlog)
+    get_target_property(_spdlog_inc_dirs spdlog::spdlog INTERFACE_INCLUDE_DIRECTORIES)
+    if(_spdlog_inc_dirs)
+        target_include_directories(_flexiv_rt BEFORE PRIVATE ${_spdlog_inc_dirs})
+        message(STATUS "Prioritizing spdlog headers from: ${_spdlog_inc_dirs}")
+    endif()
+endif()
+
 # Some spdlog builds use external fmt (SPDLOG_FMT_EXTERNAL) but don't
 # consistently propagate fmt on all downstream link lines. Explicitly link
 # fmt when that compile mode is active to avoid runtime undefined fmt symbols.
@@ -48,17 +60,6 @@ if(TARGET spdlog::spdlog)
             endif()
         endif()
     endif()
-endif()
-
-# Fix spdlog header version conflict:
-# The conda env's Python "spdlog" pip package installs stale C++ spdlog 1.10.0 headers
-# into include/python3.10/spdlog/. pybind11 adds -isystem <python-include-dir> early,
-# so those stale headers shadow the correct spdlog (1.14.1 from the RDK).
-# Force the RDK's bundled spdlog 1.14.1 headers to be searched first via BEFORE.
-set(_rdk_spdlog_inc "${CMAKE_CURRENT_SOURCE_DIR}/flexiv_rdk/thirdparty/scripts/spdlog/include")
-if(EXISTS "${_rdk_spdlog_inc}/spdlog/version.h")
-    target_include_directories(_flexiv_rt BEFORE PRIVATE ${_rdk_spdlog_inc})
-    message(STATUS "Using RDK spdlog headers: ${_rdk_spdlog_inc}")
 endif()
 
 # flexiv::flexiv_rdk transitively brings Eigen3, spdlog, fastrtps, fastcdr, Threads
