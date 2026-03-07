@@ -63,7 +63,7 @@ void JointImpedanceControl::stop()
     shm_->emergency_stop.store(true);
     is_running_.store(false);
     try {
-        if (scheduler_) scheduler_->Stop();   // blocks until the RT thread has joined
+        scheduler_.reset();   // ~Scheduler(): Stop() + sem_unlink (once, no double)
     } catch (...) {}
 }
 

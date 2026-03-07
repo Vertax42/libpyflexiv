@@ -114,7 +114,6 @@ mkdir -p build && cd build
 
 cmake .. \
   -DCMAKE_PREFIX_PATH=~/rdk_install \
-  -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
   -DPython3_EXECUTABLE=$(which python)
 
 make -j$(nproc)
