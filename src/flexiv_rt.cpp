@@ -224,19 +224,22 @@ public:
         register_joint_control(ctrl);
         return ctrl;
     }
-    std::shared_ptr<CartesianMotionForceControl> start_cartesian_control() {
+    std::shared_ptr<CartesianMotionForceControl> start_cartesian_control(
+        std::string task_name = "CartesianRT") {
         if (closed_.load()) {
             throw std::runtime_error("Robot is closed");
         }
         auto prestarted = take_prestarted();
         std::shared_ptr<CartesianMotionForceControl> ctrl;
         if (prestarted) {
-            // Fast path: Scheduler already running idle proxy
+            // Fast path: Scheduler already running idle proxy.
+            // task_name was already embedded when precreate_scheduler() ran.
             ctrl = std::make_shared<CartesianMotionForceControl>(
                 *robot_, std::move(*prestarted));
         } else {
             // Fallback: legacy path (Scheduler + AddTask + Start)
-            ctrl = std::make_shared<CartesianMotionForceControl>(*robot_);
+            ctrl = std::make_shared<CartesianMotionForceControl>(
+                *robot_, nullptr, std::move(task_name));
         }
         register_cartesian_control(ctrl);
         return ctrl;
@@ -245,15 +248,19 @@ public:
     // ── Scheduler pre-creation + pre-start (overlap with homing/FT-zeroing) ──
     // Launches async thread that: Scheduler() ~2s + AddTask(idle) + Start() ~2s
     // Total ~4s hidden behind homing + FT-zeroing.
-    void precreate_scheduler() {
+    // task_name must be unique across all concurrent Scheduler instances in
+    // the same process (it is used as the POSIX semaphore name).
+    void precreate_scheduler(int cpu_affinity = -1,
+                             std::string task_name = "CartesianRT") {
         std::lock_guard<std::mutex> lock(scheduler_mutex_);
         if (prestarted_future_.valid()) return;  // already in progress
-        prestarted_future_ = std::async(std::launch::async, []() {
+        prestarted_future_ = std::async(std::launch::async,
+            [cpu_affinity, task_name = std::move(task_name)]() {
             auto sched = std::make_unique<flexiv::rdk::Scheduler>();
             auto proxy = std::make_shared<RTCallbackProxy>();
             sched->AddTask(
                 [proxy]() { proxy->call(); },
-                "CartesianRT", 1, sched->max_priority());
+                task_name, 1, sched->max_priority(), cpu_affinity);
             sched->Start();
             return PrestartedScheduler{std::move(sched), std::move(proxy)};
         });
@@ -635,10 +642,10 @@ PYBIND11_MODULE(_flexiv_rt, m)
              py::arg("T_in_root") = py::list())
         .def("SetNullSpacePosture",   &PyRobot::SetNullSpacePosture)
         // Scheduler pre-creation (overlap with homing to hide latency)
-        .def("precreate_scheduler", [](PyRobot& self) {
+        .def("precreate_scheduler", [](PyRobot& self, int cpu_affinity, const std::string& task_name) {
             py::gil_scoped_release release;
-            self.precreate_scheduler();
-        })
+            self.precreate_scheduler(cpu_affinity, task_name);
+        }, py::arg("cpu_affinity") = -1, py::arg("task_name") = "CartesianRT")
         // RT control entry points – wrap in Python helper classes
         // GIL must be released while Scheduler creates SCHED_FIFO threads
         .def("start_joint_impedance_control",
@@ -652,13 +659,14 @@ PYBIND11_MODULE(_flexiv_rt, m)
              },
              py::keep_alive<0, 1>())
         .def("start_cartesian_control",
-             [](PyRobot& self) {
+             [](PyRobot& self, const std::string& task_name) {
                  std::shared_ptr<CartesianMotionForceControl> ctrl;
                  {
                      py::gil_scoped_release release;
-                     ctrl = self.start_cartesian_control();
+                     ctrl = self.start_cartesian_control(task_name);
                  }
                  return std::make_shared<PyCartesianMotionForceControl>(ctrl);
              },
+             py::arg("task_name") = "CartesianRT",
              py::keep_alive<0, 1>());
 }

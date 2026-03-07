@@ -46,8 +46,10 @@ void CartesianMotionForceControl::initSharedMemory()
 // ---------------------------------------------------------------------------
 CartesianMotionForceControl::CartesianMotionForceControl(
     flexiv::rdk::Robot& robot,
-    std::unique_ptr<flexiv::rdk::Scheduler> pre_scheduler)
+    std::unique_ptr<flexiv::rdk::Scheduler> pre_scheduler,
+    std::string task_name)
     : robot_(robot)
+    , task_name_(std::move(task_name))
     , shm_(std::make_shared<CartesianSharedMemory>())
 {
     initSharedMemory();
@@ -64,7 +66,7 @@ CartesianMotionForceControl::CartesianMotionForceControl(
 
     scheduler_->AddTask(
         [this]() { PeriodicCallback(); },
-        "CartesianRT", 1, scheduler_->max_priority());
+        task_name_, 1, scheduler_->max_priority());
     logger()->info("{}", "CartesianMotionForceControl: AddTask done, calling Start()...");
     scheduler_->Start();
     logger()->info("{}", "CartesianMotionForceControl: Start() returned, RT thread running");
@@ -99,8 +101,15 @@ void CartesianMotionForceControl::stop()
     if (stopped_.exchange(true)) return;
     shm_->emergency_stop.store(true);
     is_running_.store(false);
+    // Release the Scheduler via reset() rather than calling Stop() explicitly.
+    // Flexiv RDK's Scheduler calls sem_unlink() in both Stop() and ~Scheduler(),
+    // so calling Stop() before the destructor produces a harmless but noisy
+    // "sem_unlink() failed" error.  By letting ~Scheduler() be the sole caller
+    // of Stop() (which also does the sem_unlink), we get exactly one unlink.
+    // ~Scheduler() blocks until the RT thread has joined, providing the same
+    // ordering guarantee as an explicit Stop() call.
     try {
-        if (scheduler_) scheduler_->Stop();   // blocks until the RT thread has joined
+        scheduler_.reset();   // ~Scheduler(): Stop() + sem_unlink (once)
     } catch (...) {}
 }
 

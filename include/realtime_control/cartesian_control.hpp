@@ -92,9 +92,12 @@ class CartesianMotionForceControl {
 public:
     /// Legacy constructor: creates Scheduler (if nullptr), AddTask, Start.
     /// Blocks for ~2-4s.
+    /// task_name is the POSIX semaphore name used by the Scheduler; each
+    /// concurrent Scheduler instance must use a unique name.
     explicit CartesianMotionForceControl(
         flexiv::rdk::Robot& robot,
-        std::unique_ptr<flexiv::rdk::Scheduler> pre_scheduler = nullptr);
+        std::unique_ptr<flexiv::rdk::Scheduler> pre_scheduler = nullptr,
+        std::string task_name = "CartesianRT");
 
     /// Pre-started constructor: Scheduler is already running an idle proxy.
     /// Just activates the callback — near-instant.
@@ -126,6 +129,7 @@ private:
     void initSharedMemory();   // common init for both constructors
 
     flexiv::rdk::Robot&    robot_;
+    std::string            task_name_;
     std::unique_ptr<flexiv::rdk::Scheduler> scheduler_;
     std::shared_ptr<CartesianSharedMemory> shm_;
     std::shared_ptr<RTCallbackProxy>       proxy_;   // kept alive for pre-started path
