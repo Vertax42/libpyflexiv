@@ -9,8 +9,10 @@ namespace flexiv_rt {
 
 JointImpedanceControl::JointImpedanceControl(
     flexiv::rdk::Robot& robot,
-    std::unique_ptr<flexiv::rdk::Scheduler> pre_scheduler)
+    std::unique_ptr<flexiv::rdk::Scheduler> pre_scheduler,
+    std::string task_name)
     : robot_(robot)
+    , task_name_(std::move(task_name))
     , shm_(std::make_shared<JointSharedMemory>())
 {
     // Capture initial joint positions as the first hold target
@@ -47,7 +49,7 @@ JointImpedanceControl::JointImpedanceControl(
 
     scheduler_->AddTask(
         [this]() { PeriodicCallback(); },
-        "JointImpedanceRT", 1, scheduler_->max_priority());
+        task_name_, 1, scheduler_->max_priority());
     scheduler_->Start();
 }
 

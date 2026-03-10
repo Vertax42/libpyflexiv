@@ -215,31 +215,33 @@ public:
     }
 
     // ── RT control entry points ──
-    std::shared_ptr<JointImpedanceControl> start_joint_impedance_control() {
+    std::shared_ptr<JointImpedanceControl> start_joint_impedance_control(
+        std::string task_name = "JointImpedanceRT") {
         if (closed_.load()) {
             throw std::runtime_error("Robot is closed");
         }
         // JointImpedanceControl always creates its own Scheduler (no pre-start).
-        auto ctrl = std::make_shared<JointImpedanceControl>(*robot_, nullptr);
+        auto ctrl = std::make_shared<JointImpedanceControl>(*robot_, nullptr, std::move(task_name));
         register_joint_control(ctrl);
         return ctrl;
     }
     std::shared_ptr<CartesianMotionForceControl> start_cartesian_control(
-        std::string task_name = "CartesianRT") {
+        std::string task_name        = "CartesianRT",
+        int         inner_control_hz = 1000,
+        bool        interpolate_cmds = false) {
         if (closed_.load()) {
             throw std::runtime_error("Robot is closed");
         }
         auto prestarted = take_prestarted();
         std::shared_ptr<CartesianMotionForceControl> ctrl;
         if (prestarted) {
-            // Fast path: Scheduler already running idle proxy.
-            // task_name was already embedded when precreate_scheduler() ran.
             ctrl = std::make_shared<CartesianMotionForceControl>(
-                *robot_, std::move(*prestarted));
+                *robot_, std::move(*prestarted),
+                inner_control_hz, interpolate_cmds);
         } else {
-            // Fallback: legacy path (Scheduler + AddTask + Start)
             ctrl = std::make_shared<CartesianMotionForceControl>(
-                *robot_, nullptr, std::move(task_name));
+                *robot_, nullptr, std::move(task_name),
+                inner_control_hz, interpolate_cmds);
         }
         register_cartesian_control(ctrl);
         return ctrl;
@@ -649,24 +651,37 @@ PYBIND11_MODULE(_flexiv_rt, m)
         // RT control entry points – wrap in Python helper classes
         // GIL must be released while Scheduler creates SCHED_FIFO threads
         .def("start_joint_impedance_control",
-             [](PyRobot& self) {
+             [](PyRobot& self, const std::string& task_name) {
                  std::shared_ptr<JointImpedanceControl> ctrl;
                  {
                      py::gil_scoped_release release;
-                     ctrl = self.start_joint_impedance_control();
+                     ctrl = self.start_joint_impedance_control(task_name);
                  }
                  return std::make_shared<PyJointImpedanceControl>(ctrl);
              },
+             py::arg("task_name") = "JointImpedanceRT",
              py::keep_alive<0, 1>())
         .def("start_cartesian_control",
-             [](PyRobot& self, const std::string& task_name) {
+             [](PyRobot& self, const std::string& task_name,
+                int inner_control_hz, bool interpolate_cmds) {
                  std::shared_ptr<CartesianMotionForceControl> ctrl;
                  {
                      py::gil_scoped_release release;
-                     ctrl = self.start_cartesian_control(task_name);
+                     ctrl = self.start_cartesian_control(
+                         task_name, inner_control_hz, interpolate_cmds);
                  }
                  return std::make_shared<PyCartesianMotionForceControl>(ctrl);
              },
-             py::arg("task_name") = "CartesianRT",
+             py::arg("task_name")        = "CartesianRT",
+             py::arg("inner_control_hz") = 1000,
+             py::arg("interpolate_cmds") = false,
+             "Start the RT Cartesian control thread.\n\n"
+             "inner_control_hz: how often the RT thread (1 kHz) consumes a new\n"
+             "  Python command (1–1000 Hz). Between consumption cycles the thread\n"
+             "  holds (or interpolates if interpolate_cmds=True) the last pose.\n"
+             "  Default=1000 (original behaviour: consume every 1 ms cycle).\n\n"
+             "interpolate_cmds: when True, each new Python command triggers a\n"
+             "  MinJerk trajectory over one command period for smooth motion at\n"
+             "  low command rates. Default=False.",
              py::keep_alive<0, 1>());
 }

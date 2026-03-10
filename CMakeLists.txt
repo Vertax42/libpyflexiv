@@ -71,7 +71,7 @@ target_link_libraries(_flexiv_rt PRIVATE flexiv::flexiv_rdk)
 # --wrap redirects all calls to mlockall inside the linked static library to our
 # __wrap_mlockall (a no-op that returns 0).  The Scheduler still gets SCHED_FIFO
 # priority and semaphore — only the page-locking is skipped.
-target_link_options(_flexiv_rt PRIVATE -Wl,--wrap=mlockall)
+target_link_options(_flexiv_rt PRIVATE -Wl,--wrap=mlockall -Wl,--wrap=sem_unlink)
 
 set_target_properties(_flexiv_rt PROPERTIES
     LIBRARY_OUTPUT_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/flexiv_rt

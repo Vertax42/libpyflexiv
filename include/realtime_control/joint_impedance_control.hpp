@@ -40,7 +40,8 @@ class JointImpedanceControl {
 public:
     explicit JointImpedanceControl(
         flexiv::rdk::Robot& robot,
-        std::unique_ptr<flexiv::rdk::Scheduler> pre_scheduler = nullptr);
+        std::unique_ptr<flexiv::rdk::Scheduler> pre_scheduler = nullptr,
+        std::string task_name = "JointImpedanceRT");
     ~JointImpedanceControl();
 
     // Python-thread-safe API
@@ -57,6 +58,7 @@ public:
 
 private:
     flexiv::rdk::Robot&    robot_;
+    std::string            task_name_;
     std::unique_ptr<flexiv::rdk::Scheduler> scheduler_;
     std::shared_ptr<JointSharedMemory> shm_;
     std::mutex             shm_mutex_;

@@ -3,6 +3,7 @@
 #include "realtime_control/rt_common.hpp"
 #include <cerrno>
 #include <cmath>
+#include <semaphore.h>
 #include <sys/mman.h>
 #include <stdexcept>
 
@@ -17,6 +18,24 @@
 extern "C" int __wrap_mlockall(int flags) {
     flexiv_rt::logger()->info("mlockall(flags={}) intercepted — skipped (OOM prevention)", flags);
     return 0;  // pretend success
+}
+
+// ---------------------------------------------------------------------------
+// Intercept sem_unlink() called by flexiv::rdk::Scheduler::Stop() and
+// ~Scheduler().  The SDK calls sem_unlink() in both paths, so the second
+// call always fails with ENOENT ("No such file or directory").  This is
+// harmless but prints a noisy [error] log line.  We suppress ENOENT and
+// forward all other errors to the real sem_unlink.
+// Linked via -Wl,--wrap=sem_unlink.
+// ---------------------------------------------------------------------------
+extern "C" int __real_sem_unlink(const char* name);
+extern "C" int __wrap_sem_unlink(const char* name) {
+    int ret = __real_sem_unlink(name);
+    if (ret == -1 && errno == ENOENT) {
+        errno = 0;
+        return 0;
+    }
+    return ret;
 }
 
 namespace flexiv_rt {
@@ -42,21 +61,40 @@ void CartesianMotionForceControl::initSharedMemory()
 }
 
 // ---------------------------------------------------------------------------
+// Helper: validate and store inner_control_hz / interpolate_cmds
+// ---------------------------------------------------------------------------
+void CartesianMotionForceControl::initControlParams(int inner_control_hz, bool interpolate_cmds)
+{
+    if (inner_control_hz < 1 || inner_control_hz > 1000) {
+        throw std::invalid_argument(
+            "inner_control_hz must be in [1, 1000], got "
+            + std::to_string(inner_control_hz));
+    }
+    // 1000 must be divisible by inner_control_hz for exact timing.
+    // We round to the nearest integer — the resulting jitter is < 1 ms.
+    cmd_decimation_   = static_cast<int>(std::round(1000.0 / inner_control_hz));
+    interpolate_cmds_ = interpolate_cmds;
+    logger()->info(
+        "CartesianMotionForceControl: inner_control_hz={} → decimation={} interpolate={}",
+        inner_control_hz, cmd_decimation_, interpolate_cmds_);
+}
+
+// ---------------------------------------------------------------------------
 // Legacy constructor: Scheduler() + AddTask + Start() — blocks ~2-4s
 // ---------------------------------------------------------------------------
 CartesianMotionForceControl::CartesianMotionForceControl(
     flexiv::rdk::Robot& robot,
     std::unique_ptr<flexiv::rdk::Scheduler> pre_scheduler,
-    std::string task_name)
+    std::string task_name,
+    int  inner_control_hz,
+    bool interpolate_cmds)
     : robot_(robot)
     , task_name_(std::move(task_name))
     , shm_(std::make_shared<CartesianSharedMemory>())
 {
+    initControlParams(inner_control_hz, interpolate_cmds);
     initSharedMemory();
 
-    // Use pre-created Scheduler or construct a new one.
-    // mlockall() inside the constructor is intercepted by __wrap_mlockall
-    // (no-op), so no OOM risk.
     if (pre_scheduler) {
         scheduler_ = std::move(pre_scheduler);
         logger()->info("{}", "CartesianMotionForceControl: using pre-created Scheduler");
@@ -77,15 +115,17 @@ CartesianMotionForceControl::CartesianMotionForceControl(
 // ---------------------------------------------------------------------------
 CartesianMotionForceControl::CartesianMotionForceControl(
     flexiv::rdk::Robot& robot,
-    PrestartedScheduler prestarted)
+    PrestartedScheduler prestarted,
+    int  inner_control_hz,
+    bool interpolate_cmds)
     : robot_(robot)
     , scheduler_(std::move(prestarted.scheduler))
     , shm_(std::make_shared<CartesianSharedMemory>())
     , proxy_(std::move(prestarted.proxy))
 {
+    initControlParams(inner_control_hz, interpolate_cmds);
     initSharedMemory();
 
-    // Activate the proxy: RT thread starts calling PeriodicCallback()
     proxy_->activate([this]() { PeriodicCallback(); });
     logger()->info("{}", "CartesianMotionForceControl: activated pre-started Scheduler, RT thread running");
 }
@@ -110,6 +150,14 @@ void CartesianMotionForceControl::stop()
     // ordering guarantee as an explicit Stop() call.
     try {
         scheduler_.reset();   // ~Scheduler(): Stop() + sem_unlink (once)
+    } catch (...) {}
+
+    // Immediately tell the robot to stop expecting RT commands.
+    // Without this, there is a gap between the RT thread joining (above) and
+    // the Python-level robot.Stop() call, during which the robot detects
+    // missed 1 kHz commands and logs "Timeliness failure".
+    try {
+        robot_.Stop();
     } catch (...) {}
 }
 
@@ -237,7 +285,14 @@ void CartesianMotionForceControl::PeriodicCallback()
         return;
     }
 
-    // 3. Lock and read commands from SHM (short lock — just memory copies)
+    // 3. Frequency decimation:
+    //    Always increment the cycle counter. Only poll SHM for a new Python
+    //    command every cmd_decimation_ cycles (e.g. every 2nd cycle = 500 Hz).
+    //    moveToPose requests are always consumed immediately (safety critical).
+    ++cycle_counter_;
+    const bool consume_cmd = (cycle_counter_ >= cmd_decimation_);
+    if (consume_cmd) cycle_counter_ = 0;
+
     MoveRequest move_req;
     CartesianCommand cmd;
     bool cmd_received = false;
@@ -247,21 +302,23 @@ void CartesianMotionForceControl::PeriodicCallback()
     {
         std::lock_guard<std::mutex> lock(shm_mutex_);
 
-        // Read move request
+        // Always consume move requests (safety: don't delay reset trajectories)
         move_req = shm_->move_request;
         if (move_req.pending) {
-            shm_->move_request.pending = false;  // consume the request
+            shm_->move_request.pending = false;
         }
 
-        // Read streaming command (needed for STREAMING state)
-        cmd          = shm_->command;
-        cmd_received = shm_->command_received.load();
-        cmd_interval = shm_->cmd_interval_sec;
+        // Only read streaming commands on decimation boundary
+        if (consume_cmd) {
+            cmd          = shm_->command;
+            cmd_received = shm_->command_received.load();
+            cmd_interval = shm_->cmd_interval_sec;
 
-        if (cmd_received) {
-            auto elapsed = std::chrono::steady_clock::now() - shm_->last_cmd_time;
-            if (elapsed > kCommandTimeout) {
-                timed_out = true;
+            if (cmd_received) {
+                auto elapsed = std::chrono::steady_clock::now() - shm_->last_cmd_time;
+                if (elapsed > kCommandTimeout) {
+                    timed_out = true;
+                }
             }
         }
     }
@@ -340,55 +397,108 @@ void CartesianMotionForceControl::PeriodicCallback()
     } else {
         // --- STREAMING state ---
 
-        // NaN/Inf check on pose
-        if (!CheckFinite(cmd.pose)) {
-            logger()->error("{}", "CartesianMotionForceControl: NaN/Inf in command pose");
-            shm_->emergency_stop.store(true);
-            is_running_.store(false);
-            send_error = true;
-        }
-
-        if (!send_error) {
-            // Jump check – position and rotation
-            //     Thresholds = max_velocity * cmd_interval → adapts to Python frequency
-            const double pos_jump_thresh = kMaxPositionVelocity * cmd_interval;
-            const double rot_jump_thresh = kMaxRotationVelocity * cmd_interval;
-            if (CheckCartesianJump(cmd.pose, last_sent_pose_,
-                                   pos_jump_thresh, rot_jump_thresh)) {
-                cmd.pose         = last_sent_pose_;
-                cmd.wrench       = {};
-                cmd.velocity     = {};
-                cmd.acceleration = {};
+        if (!consume_cmd) {
+            // Non-decimation cycle: step the streaming interpolation (if active)
+            // or just hold the last pose.
+            std::array<double,7> interp_pose = last_sent_pose_;
+            std::array<double,6> interp_vel  = {};
+            if (interpolate_cmds_ && stream_interp_.isActive()) {
+                bool in_progress = stream_interp_.step(interp_pose, interp_vel);
+                if (!in_progress) {
+                    // Interpolation done, hold at target
+                    interp_pose = last_sent_pose_;
+                    interp_vel  = {};
+                }
             }
-
-            // Timeout – hold last pose, zero dynamics
-            if (timed_out) {
-                cmd.pose         = last_sent_pose_;
-                cmd.wrench       = {};
-                cmd.velocity     = {};
-                cmd.acceleration = {};
-            }
-
-            // Send command
             try {
-                robot_.StreamCartesianMotionForce(
-                    cmd.pose, cmd.wrench, cmd.velocity, cmd.acceleration);
+                robot_.StreamCartesianMotionForce(interp_pose, {}, interp_vel, {});
             } catch (const std::exception& e) {
                 logger()->error("CartesianMotionForceControl: StreamCartesianMotionForce error: {}", e.what());
                 shm_->emergency_stop.store(true);
                 is_running_.store(false);
                 send_error = true;
             }
+            if (!send_error) last_sent_pose_ = interp_pose;
+
+        } else {
+            // Decimation boundary cycle: process new Python command.
+
+            // NaN/Inf check
+            if (!CheckFinite(cmd.pose)) {
+                logger()->error("{}", "CartesianMotionForceControl: NaN/Inf in command pose");
+                shm_->emergency_stop.store(true);
+                is_running_.store(false);
+                send_error = true;
+            }
+
             if (!send_error) {
-                last_sent_pose_ = cmd.pose;
+                // Jump check (threshold adapts to effective command interval)
+                const double effective_interval = cmd_interval * cmd_decimation_;
+                const double pos_jump_thresh = kMaxPositionVelocity * effective_interval;
+                const double rot_jump_thresh = kMaxRotationVelocity * effective_interval;
+                if (CheckCartesianJump(cmd.pose, last_sent_pose_,
+                                       pos_jump_thresh, rot_jump_thresh)) {
+                    cmd.pose         = last_sent_pose_;
+                    cmd.wrench       = {};
+                    cmd.velocity     = {};
+                    cmd.acceleration = {};
+                }
+
+                // Timeout – hold last pose
+                if (timed_out) {
+                    cmd.pose         = last_sent_pose_;
+                    cmd.wrench       = {};
+                    cmd.velocity     = {};
+                    cmd.acceleration = {};
+                }
+
+                // Start streaming interpolation toward the new command target
+                if (interpolate_cmds_ && cmd_decimation_ > 1) {
+                    // Duration = one command period (1/inner_control_hz seconds)
+                    double period_sec = cmd_decimation_ * 0.001;
+                    stream_interp_.init(last_sent_pose_, cmd.pose, period_sec);
+                    // Step once immediately for this cycle
+                    std::array<double,7> interp_pose;
+                    std::array<double,6> interp_vel;
+                    stream_interp_.step(interp_pose, interp_vel);
+                    try {
+                        robot_.StreamCartesianMotionForce(interp_pose, cmd.wrench, interp_vel, {});
+                    } catch (const std::exception& e) {
+                        logger()->error("CartesianMotionForceControl: StreamCartesianMotionForce error: {}", e.what());
+                        shm_->emergency_stop.store(true);
+                        is_running_.store(false);
+                        send_error = true;
+                    }
+                    if (!send_error) last_sent_pose_ = interp_pose;
+                } else {
+                    // No interpolation: snap to command immediately
+                    try {
+                        robot_.StreamCartesianMotionForce(
+                            cmd.pose, cmd.wrench, cmd.velocity, cmd.acceleration);
+                    } catch (const std::exception& e) {
+                        logger()->error("CartesianMotionForceControl: StreamCartesianMotionForce error: {}", e.what());
+                        shm_->emergency_stop.store(true);
+                        is_running_.store(false);
+                        send_error = true;
+                    }
+                    if (!send_error) last_sent_pose_ = cmd.pose;
+                }
             }
         }
     }
 
-    // 6. Refresh robot states AFTER command send (outside lock, non-critical).
-    //    robot_.states() is a potentially slow IPC call — doing it after the
-    //    send ensures the command meets the 1 ms deadline.
-    if (!send_error) {
+    // 6. Refresh robot states — ONLY on decimation boundary cycles.
+    //
+    //    robot_.states() is a heavy IPC/DDS call that can take 0.2–0.8 ms
+    //    with occasional spikes > 1 ms (especially under system load / JAX JIT).
+    //    Calling it every 1 ms cycle pushes the NEXT cycle's StreamCartesianMotionForce
+    //    past the 1 ms deadline, which increments the Flexiv timeliness counter.
+    //
+    //    Since Python reads observations at << 1 kHz (typically 25–100 Hz), staleness
+    //    of up to cmd_decimation_ ms (e.g. 2 ms at 500 Hz, 10 ms at 100 Hz) is
+    //    invisible to the control loop.  On non-decimation cycles we skip states()
+    //    entirely, keeping the RT callback as short as possible.
+    if (!send_error && consume_cmd) {
         try {
             auto rs = robot_.states();
             std::lock_guard<std::mutex> lock(shm_mutex_);

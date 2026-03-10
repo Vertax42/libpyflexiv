@@ -94,16 +94,31 @@ public:
     /// Blocks for ~2-4s.
     /// task_name is the POSIX semaphore name used by the Scheduler; each
     /// concurrent Scheduler instance must use a unique name.
+    ///
+    /// inner_control_hz: how often the RT callback consumes a new Python
+    ///   command (1–1000 Hz). The Scheduler always runs at 1 kHz (required
+    ///   by Flexiv SDK); this parameter adds an N-cycle decimator on top.
+    ///   Between command consumption cycles the RT thread holds / interpolates.
+    ///   Default = 1000 (consume every cycle — original behaviour).
+    ///
+    /// interpolate_cmds: when true, each newly consumed Python command
+    ///   triggers a MinJerk trajectory from current pose to target over
+    ///   1/inner_control_hz seconds, giving smooth motion at low command rates.
+    ///   Default = false (snap to command immediately, original behaviour).
     explicit CartesianMotionForceControl(
         flexiv::rdk::Robot& robot,
         std::unique_ptr<flexiv::rdk::Scheduler> pre_scheduler = nullptr,
-        std::string task_name = "CartesianRT");
+        std::string task_name        = "CartesianRT",
+        int         inner_control_hz = 1000,
+        bool        interpolate_cmds = false);
 
     /// Pre-started constructor: Scheduler is already running an idle proxy.
     /// Just activates the callback — near-instant.
     CartesianMotionForceControl(
         flexiv::rdk::Robot& robot,
-        PrestartedScheduler prestarted);
+        PrestartedScheduler prestarted,
+        int  inner_control_hz = 1000,
+        bool interpolate_cmds = false);
 
     ~CartesianMotionForceControl();
 
@@ -127,6 +142,7 @@ public:
 
 private:
     void initSharedMemory();   // common init for both constructors
+    void initControlParams(int inner_control_hz, bool interpolate_cmds);
 
     flexiv::rdk::Robot&    robot_;
     std::string            task_name_;
@@ -138,8 +154,16 @@ private:
     std::atomic<bool>      is_running_{true};
     std::atomic<bool>      stopped_{false};   // guards against double-stop
 
+    // --- Frequency decimation (RT thread only — no mutex needed) ---
+    // cmd_decimation_: N = 1000 / inner_control_hz
+    //   e.g. inner_control_hz=500 → N=2, consume new cmd every 2nd cycle
+    int  cmd_decimation_{1};      // cycles per command poll (1 = every cycle)
+    int  cycle_counter_{0};       // counts up to cmd_decimation_
+    bool interpolate_cmds_{false};// smooth streaming cmds via MinJerk
+
     // Trajectory state (RT thread only — no mutex needed)
     MinJerkTrajectory      trajectory_;
+    MinJerkTrajectory      stream_interp_;  // streaming interpolation trajectory
     enum class RTState { STREAMING, MOVING };
     RTState                rt_state_ = RTState::STREAMING;
 
