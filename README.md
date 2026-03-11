@@ -1,6 +1,6 @@
 # libpyflexiv
 
-Python real-time control bindings for Flexiv robots (Rizon 4/4s/10/10s), built on [Flexiv RDK v1.9](https://github.com/flexivrobotics/flexiv_rdk) and [pybind11](https://github.com/pybind/pybind11).
+Python real-time control bindings for Flexiv robots (Rizon 4/4s/10/10s), built on [Flexiv RDK v1.8](https://github.com/flexivrobotics/flexiv_rdk) and [pybind11](https://github.com/pybind/pybind11).
 
 ## Why This Project Exists
 
@@ -94,10 +94,7 @@ mamba create -n lerobot-xense python=3.10 -y
 mamba activate lerobot-xense
 
 # Build dependency
-pip install pybind11
-
-# (Optional) runtime dependencies for lerobot
-# pip install -e /path/to/lerobot-xense
+mamba install pybind11 -y
 ```
 
 ### Step 3: Build C++ Bindings
