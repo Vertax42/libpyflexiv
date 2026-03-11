@@ -51,24 +51,39 @@ Complete instructions from creating a fresh mamba environment to a working `impo
 sudo apt install build-essential cmake git
 ```
 
-No ROS 2 required — all C++ dependencies (Eigen, spdlog, Fast-DDS, Fast-CDR, RBDyn, etc.) are built from source by the provided script in Step 1.
+No ROS 2 required — all C++ dependencies (Eigen, spdlog, Fast-DDS, Fast-CDR, RBDyn, etc.) are built from source by the provided script in Step 2.
 
-### Step 1: Install Flexiv RDK and All Dependencies
+### Step 1: Create Mamba Environment
 
-The `flexiv_rdk` SDK is already included as a submodule. First, build and install all its C++ dependencies to `~/rdk_install`, then build and install the RDK itself.
+Create the environment first — all subsequent steps run inside it:
+
+```bash
+mamba create -n lerobot-xense python=3.1x -y
+mamba activate lerobot-xense
+
+# Build dependency
+mamba install pybind11 -y
+```
+
+> All remaining steps assume `lerobot-xense` is activated.
+
+### Step 2: Install Flexiv RDK and All Dependencies
+
+The official `flexiv_rdk` SDK is included as a git submodule pinned to the tested `v1.8` tag commit. Initialize the submodule after cloning this repo, then build and install all its C++ dependencies to `~/rdk_install`, and finally build and install the RDK itself.
 
 ```bash
 cd /path/to/libpyflexiv
 
-# Step 1a: Build and install all C++ dependencies from source
+# If you cloned libpyflexiv without --recurse-submodules:
+git submodule update --init --recursive
+
+# Step 2a: Build and install all C++ dependencies from source
 # (Eigen, spdlog, tinyxml2, yaml-cpp, foonathan_memory,
 #  Fast-CDR, Fast-DDS, Boost, SpaceVecAlg, RBDyn)
-git clone https://github.com/flexivrobotics/flexiv_rdk.git
-git checkout v1.8
 cd flexiv_rdk/thirdparty
 bash build_and_install_dependencies.sh ~/rdk_install $(nproc)
 
-# Step 1b: Build and install flexiv_rdk itself
+# Step 2b: Build and install flexiv_rdk itself
 cd /path/to/libpyflexiv/flexiv_rdk
 mkdir -p build && cd build
 cmake .. \
@@ -80,22 +95,11 @@ cmake --build . --target install --config Release -j$(nproc)
 > **Note**: No `sudo` needed — everything installs to your home directory.
 > The RDK static library (`libflexiv_rdk.x86_64-linux-gnu.a`) is automatically downloaded
 > from GitHub during the cmake configure step.
+> The submodule is intentionally checked out at the pinned `v1.8` commit, so a detached `HEAD` inside `flexiv_rdk/` is expected.
 
 Verify:
 - `ls ~/rdk_install/include/flexiv/rdk/robot.hpp` should exist
 - `ls ~/rdk_install/lib/cmake/flexiv_rdk/flexiv_rdk-config.cmake` should exist
-
-### Step 2: Create Mamba Environment
-
-Create a Python 3.10 environment with the packages needed for building and running:
-
-```bash
-mamba create -n lerobot-xense python=3.10 -y
-mamba activate lerobot-xense
-
-# Build dependency
-mamba install pybind11 -y
-```
 
 ### Step 3: Build C++ Bindings
 
@@ -104,8 +108,6 @@ Point CMake at the Flexiv RDK install prefix and at your conda Python interprete
 **Important**: Only pass `~/rdk_install` as `CMAKE_PREFIX_PATH` — do NOT include the conda env prefix. The conda env contains a different spdlog version that will cause header conflicts.
 
 ```bash
-mamba activate lerobot-xense
-
 cd /path/to/libpyflexiv
 mkdir -p build && cd build
 
@@ -144,13 +146,13 @@ This produces `flexiv_rt/_flexiv_rt.cpython-310-x86_64-linux-gnu.so` in the proj
 Editable install — the compiled `.so` is already in place:
 
 ```bash
-mamba run -n lerobot-xense pip install -e /path/to/libpyflexiv
+pip install -e /path/to/libpyflexiv
 ```
 
 Verify:
 
 ```bash
-mamba run -n lerobot-xense python -c "import flexiv_rt; print('OK')"
+python -c "import flexiv_rt; print('OK')"
 ```
 
 ### Running (requires `sudo` for SCHED_FIFO)
@@ -494,7 +496,7 @@ libpyflexiv/
 ├── CMakeLists.txt                  # Top-level build (pybind11 module)
 ├── pyproject.toml                  # Python package metadata
 ├── setup.py                        # pip install support
-├── flexiv_rdk/                     # Flexiv RDK v1.8 SDK (headers + prebuilt lib)
+├── flexiv_rdk/                     # Flexiv RDK v1.8 SDK submodule
 ├── include/realtime_control/       # C++ RT control headers
 │   ├── rt_common.hpp               #   Safety constants & check functions
 │   ├── shared_memory.hpp           #   SPSC ring buffer (alternative design)
