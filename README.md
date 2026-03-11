@@ -38,6 +38,21 @@ Python (non-RT, ~100 Hz)              C++ RT thread (SCHED_FIFO, 1 kHz)
 
 Complete instructions from creating a fresh mamba environment to a working `import flexiv_rt`.
 
+### Clone This Repository
+
+Clone `libpyflexiv` together with the pinned `flexiv_rdk` submodule:
+
+```bash
+git clone --recurse-submodules https://github.com/Vertax42/libpyflexiv.git
+cd libpyflexiv
+```
+
+If you already cloned the repo without submodules, run:
+
+```bash
+git submodule update --init --recursive
+```
+
 ### Prerequisites
 
 - Ubuntu 22.04 x86_64
@@ -73,9 +88,6 @@ The official `flexiv_rdk` SDK is included as a git submodule pinned to the teste
 
 ```bash
 cd /path/to/libpyflexiv
-
-# If you cloned libpyflexiv without --recurse-submodules:
-git submodule update --init --recursive
 
 # Step 2a: Build and install all C++ dependencies from source
 # (Eigen, spdlog, tinyxml2, yaml-cpp, foonathan_memory,
