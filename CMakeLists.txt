@@ -53,6 +53,12 @@ pybind11_add_module(_flexiv_rt
 
 target_include_directories(_flexiv_rt PRIVATE include/)
 
+# GCC 13+ -Wfree-nonheap-object can false-positive on inlined std::vector in
+# setTargetJoints; suppress only when the compiler supports the flag.
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL "13")
+    target_compile_options(_flexiv_rt PRIVATE -Wno-free-nonheap-object)
+endif()
+
 # flexiv::flexiv_rdk transitively brings Eigen3, spdlog, fastrtps, fastcdr, Threads
 target_link_libraries(_flexiv_rt PRIVATE flexiv::flexiv_rdk)
 
