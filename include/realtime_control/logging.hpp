@@ -7,12 +7,11 @@
 namespace flexiv_rt {
 
 /// Thread-safe singleton logger for libpyflexiv.
-/// Pattern: [YYYY-MM-DD HH:MM:SS] [libpyflexiv] [level] message
-/// (no milliseconds — keeps log output clean next to Python's logging)
+/// Pattern: [MM/DD HH:MM:SS.mmm] [libpyflexiv] [level] message
 inline std::shared_ptr<spdlog::logger>& logger() {
     static auto instance = [] {
         auto l = spdlog::stdout_color_mt("libpyflexiv");
-        l->set_pattern("[%Y-%m-%d %H:%M:%S] [%n] [%^%l%$] %v");
+        l->set_pattern("[%m/%d %H:%M:%S.%e] [%n] [%^%l%$] %v");
         return l;
     }();
     return instance;
