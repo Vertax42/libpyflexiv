@@ -17,3 +17,8 @@ add_executable(test_rt_safety test_rt_safety.cpp)
 target_include_directories(test_rt_safety PRIVATE ${_INCLUDE_DIR})
 target_link_libraries(test_rt_safety GTest::gtest_main pthread)
 add_test(NAME rt_safety COMMAND test_rt_safety)
+
+add_executable(test_trajectory test_trajectory.cpp)
+target_include_directories(test_trajectory PRIVATE ${_INCLUDE_DIR})
+target_link_libraries(test_trajectory GTest::gtest_main pthread)
+add_test(NAME trajectory COMMAND test_trajectory)
