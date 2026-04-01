@@ -216,12 +216,16 @@ public:
 
     // ── RT control entry points ──
     std::shared_ptr<JointImpedanceControl> start_joint_impedance_control(
-        std::string task_name = "JointImpedanceRT") {
+        std::string task_name = "JointImpedanceRT",
+        int  inner_control_hz = 1000,
+        bool interpolate_cmds = false) {
         if (closed_.load()) {
             throw std::runtime_error("Robot is closed");
         }
         // JointImpedanceControl always creates its own Scheduler (no pre-start).
-        auto ctrl = std::make_shared<JointImpedanceControl>(*robot_, nullptr, std::move(task_name));
+        auto ctrl = std::make_shared<JointImpedanceControl>(
+            *robot_, nullptr, std::move(task_name),
+            inner_control_hz, interpolate_cmds);
         register_joint_control(ctrl);
         return ctrl;
     }
@@ -651,15 +655,27 @@ PYBIND11_MODULE(_flexiv_rt, m)
         // RT control entry points – wrap in Python helper classes
         // GIL must be released while Scheduler creates SCHED_FIFO threads
         .def("start_joint_impedance_control",
-             [](PyRobot& self, const std::string& task_name) {
+             [](PyRobot& self, const std::string& task_name,
+                int inner_control_hz, bool interpolate_cmds) {
                  std::shared_ptr<JointImpedanceControl> ctrl;
                  {
                      py::gil_scoped_release release;
-                     ctrl = self.start_joint_impedance_control(task_name);
+                     ctrl = self.start_joint_impedance_control(
+                         task_name, inner_control_hz, interpolate_cmds);
                  }
                  return std::make_shared<PyJointImpedanceControl>(ctrl);
              },
-             py::arg("task_name") = "JointImpedanceRT",
+             py::arg("task_name")        = "JointImpedanceRT",
+             py::arg("inner_control_hz") = 1000,
+             py::arg("interpolate_cmds") = false,
+             "Start the RT Joint Impedance control thread.\n\n"
+             "inner_control_hz: how often the RT thread (1 kHz) consumes a new\n"
+             "  Python command (1-1000 Hz). Between consumption cycles the thread\n"
+             "  holds (or linearly interpolates if interpolate_cmds=True) the last\n"
+             "  position. Default=1000 (consume every 1 ms cycle).\n\n"
+             "interpolate_cmds: when True, each new Python command triggers linear\n"
+             "  interpolation over one command period for smooth motion at low\n"
+             "  command rates (e.g. 30 Hz VLA policy). Default=False.",
              py::keep_alive<0, 1>())
         .def("start_cartesian_control",
              [](PyRobot& self, const std::string& task_name,
@@ -680,8 +696,8 @@ PYBIND11_MODULE(_flexiv_rt, m)
              "  Python command (1–1000 Hz). Between consumption cycles the thread\n"
              "  holds (or interpolates if interpolate_cmds=True) the last pose.\n"
              "  Default=1000 (original behaviour: consume every 1 ms cycle).\n\n"
-             "interpolate_cmds: when True, each new Python command triggers a\n"
-             "  MinJerk trajectory over one command period for smooth motion at\n"
-             "  low command rates. Default=False.",
+             "interpolate_cmds: when True, each new Python command triggers linear\n"
+             "  interpolation over one command period for smooth motion at low\n"
+             "  command rates (e.g. 30 Hz VLA policy). Default=False.",
              py::keep_alive<0, 1>());
 }

@@ -38,10 +38,16 @@ struct JointSharedMemory {
 
 class JointImpedanceControl {
 public:
+    /// @param inner_control_hz  How often the RT callback consumes a new Python
+    ///   command (1-1000 Hz). Default=1000 (consume every 1 ms cycle).
+    /// @param interpolate_cmds  When true, linearly interpolate between commands
+    ///   for smooth streaming at low command rates (e.g. 30 Hz VLA policy).
     explicit JointImpedanceControl(
         flexiv::rdk::Robot& robot,
         std::unique_ptr<flexiv::rdk::Scheduler> pre_scheduler = nullptr,
-        std::string task_name = "JointImpedanceRT");
+        std::string task_name = "JointImpedanceRT",
+        int  inner_control_hz = 1000,
+        bool interpolate_cmds = false);
     ~JointImpedanceControl();
 
     // Python-thread-safe API
@@ -57,6 +63,8 @@ public:
     void stop();
 
 private:
+    void initControlParams(int inner_control_hz, bool interpolate_cmds);
+
     flexiv::rdk::Robot&    robot_;
     std::string            task_name_;
     std::unique_ptr<flexiv::rdk::Scheduler> scheduler_;
@@ -70,6 +78,19 @@ private:
     std::vector<double>    rt_pos_;
     std::vector<double>    rt_vel_;
     std::vector<double>    rt_acc_;
+
+    // --- Frequency decimation (RT thread only — no mutex needed) ---
+    int  cmd_decimation_{1};
+    int  cycle_counter_{0};
+    bool interpolate_cmds_{false};
+
+    // --- Joint linear interpolation state (RT thread only, pre-allocated) ---
+    std::vector<double>    interp_start_pos_;
+    std::vector<double>    interp_target_pos_;
+    std::vector<double>    interp_target_vel_;
+    uint32_t               interp_total_steps_{0};
+    uint32_t               interp_current_step_{0};
+    bool                   interp_active_{false};
 
     void PeriodicCallback();
 };

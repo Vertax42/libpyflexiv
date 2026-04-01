@@ -7,14 +7,35 @@
 
 namespace flexiv_rt {
 
+// ---------------------------------------------------------------------------
+// Helper: validate and store inner_control_hz / interpolate_cmds
+// ---------------------------------------------------------------------------
+void JointImpedanceControl::initControlParams(int inner_control_hz, bool interpolate_cmds)
+{
+    if (inner_control_hz < 1 || inner_control_hz > 1000) {
+        throw std::invalid_argument(
+            "inner_control_hz must be in [1, 1000], got "
+            + std::to_string(inner_control_hz));
+    }
+    cmd_decimation_   = static_cast<int>(std::round(1000.0 / inner_control_hz));
+    interpolate_cmds_ = interpolate_cmds;
+    logger()->info(
+        "JointImpedanceControl: inner_control_hz={} → decimation={} interpolate={}",
+        inner_control_hz, cmd_decimation_, interpolate_cmds_);
+}
+
 JointImpedanceControl::JointImpedanceControl(
     flexiv::rdk::Robot& robot,
     std::unique_ptr<flexiv::rdk::Scheduler> pre_scheduler,
-    std::string task_name)
+    std::string task_name,
+    int  inner_control_hz,
+    bool interpolate_cmds)
     : robot_(robot)
     , task_name_(std::move(task_name))
     , shm_(std::make_shared<JointSharedMemory>())
 {
+    initControlParams(inner_control_hz, interpolate_cmds);
+
     // Capture initial joint positions as the first hold target
     auto s = robot_.states();
     const size_t n = s.q.size();
@@ -24,6 +45,11 @@ JointImpedanceControl::JointImpedanceControl(
     rt_pos_ = s.q;
     rt_vel_.assign(n, 0.0);
     rt_acc_.assign(n, 0.0);
+
+    // Pre-allocate interpolation buffers
+    interp_start_pos_.assign(n, 0.0);
+    interp_target_pos_.assign(n, 0.0);
+    interp_target_vel_.assign(n, 0.0);
 
     shm_->state_q       = s.q;
     shm_->state_dq      = s.dq;
@@ -116,7 +142,7 @@ bool JointImpedanceControl::isRunning() const
 }
 
 // ---------------------------------------------------------------------------
-// RT periodic callback (runs on SCHED_FIFO thread)
+// RT periodic callback (runs on SCHED_FIFO thread at 1 kHz)
 // ** ZERO heap allocation — all buffers pre-allocated in constructor **
 // ---------------------------------------------------------------------------
 void JointImpedanceControl::PeriodicCallback()
@@ -124,11 +150,10 @@ void JointImpedanceControl::PeriodicCallback()
     // 1. Emergency stop – hold at last sent position
     if (shm_->emergency_stop.load()) {
         try {
-            // rt_vel_/rt_acc_ are already zero from init; just send last_sent_pos_
             robot_.StreamJointPosition(last_sent_pos_, rt_vel_, rt_acc_);
         } catch (const std::exception&) {
             // Intentionally swallow SDK errors during emergency stop.
-            // Do NOT use catch(...) here — it would catch abi::__forced_unwind
+            // Do NOT use catch(...) — it would catch abi::__forced_unwind
             // from pthread_cancel (used by Scheduler::Stop()) and cause
             // "FATAL: exception not rethrown" / std::terminate().
         }
@@ -144,83 +169,171 @@ void JointImpedanceControl::PeriodicCallback()
         return;
     }
 
-    // 3. Lock and read/write shared memory — element-level copy, NO vector alloc
-    bool cmd_received;
+    // 3. Frequency decimation
+    ++cycle_counter_;
+    const bool consume_cmd = (cycle_counter_ >= cmd_decimation_);
+    if (consume_cmd) cycle_counter_ = 0;
+
+    bool cmd_received = false;
     bool timed_out = false;
     double cmd_interval = kDefaultCommandInterval;
+    bool send_error = false;
 
-    {
-        std::lock_guard<std::mutex> lock(shm_mutex_);
+    if (consume_cmd) {
+        // --- Decimation boundary: read new command from SHM ---
+        {
+            std::lock_guard<std::mutex> lock(shm_mutex_);
 
-        // Copy command into pre-allocated RT buffers (same size → no realloc)
-        const auto& cmd = shm_->command;
-        std::copy(cmd.positions.begin(), cmd.positions.end(), rt_pos_.begin());
-        std::copy(cmd.velocities.begin(), cmd.velocities.end(), rt_vel_.begin());
-        std::copy(cmd.accelerations.begin(), cmd.accelerations.end(), rt_acc_.begin());
+            const auto& cmd = shm_->command;
+            std::copy(cmd.positions.begin(), cmd.positions.end(), rt_pos_.begin());
+            std::copy(cmd.velocities.begin(), cmd.velocities.end(), rt_vel_.begin());
+            std::copy(cmd.accelerations.begin(), cmd.accelerations.end(), rt_acc_.begin());
 
-        cmd_received = shm_->command_received.load();
-        cmd_interval = shm_->cmd_interval_sec;
+            cmd_received = shm_->command_received.load();
+            cmd_interval = shm_->cmd_interval_sec;
 
-        // Timeout check – only after the first command has been received
-        if (cmd_received) {
-            auto elapsed = std::chrono::steady_clock::now() - shm_->last_cmd_time;
-            if (elapsed > kCommandTimeout) {
-                timed_out = true;
+            if (cmd_received) {
+                auto elapsed = std::chrono::steady_clock::now() - shm_->last_cmd_time;
+                if (elapsed > kCommandTimeout) {
+                    timed_out = true;
+                }
+            }
+        }
+
+        // 4. NaN/Inf check
+        if (!CheckFinite(rt_pos_)) {
+            logger()->error("{}", "JointImpedanceControl: NaN/Inf in command positions");
+            shm_->emergency_stop.store(true);
+            is_running_.store(false);
+            return;
+        }
+
+        // 5. Jump check
+        const double joint_jump_thresh = kMaxJointVelocity * cmd_interval;
+        if (!last_sent_pos_.empty()
+            && CheckJointJump(rt_pos_, last_sent_pos_, joint_jump_thresh)) {
+            std::copy(last_sent_pos_.begin(), last_sent_pos_.end(), rt_pos_.begin());
+            std::fill(rt_vel_.begin(), rt_vel_.end(), 0.0);
+            std::fill(rt_acc_.begin(), rt_acc_.end(), 0.0);
+        }
+
+        // 6. Timeout – hold last position
+        if (timed_out) {
+            std::copy(last_sent_pos_.begin(), last_sent_pos_.end(), rt_pos_.begin());
+            std::fill(rt_vel_.begin(), rt_vel_.end(), 0.0);
+            std::fill(rt_acc_.begin(), rt_acc_.end(), 0.0);
+        }
+
+        // 7. Start linear interpolation or send immediately
+        if (interpolate_cmds_ && cmd_decimation_ > 1) {
+            // Snapshot current position as interpolation start
+            std::copy(last_sent_pos_.begin(), last_sent_pos_.end(), interp_start_pos_.begin());
+            std::copy(rt_pos_.begin(), rt_pos_.end(), interp_target_pos_.begin());
+
+            double period_sec = cmd_decimation_ * 0.001;
+            for (size_t i = 0; i < interp_target_vel_.size(); ++i) {
+                interp_target_vel_[i] = (interp_target_pos_[i] - interp_start_pos_[i]) / period_sec;
+            }
+
+            interp_total_steps_   = static_cast<uint32_t>(cmd_decimation_);
+            interp_current_step_  = 1;  // step once immediately
+            interp_active_        = true;
+
+            // Compute first interpolated position
+            double t = 1.0 / static_cast<double>(interp_total_steps_);
+            for (size_t i = 0; i < rt_pos_.size(); ++i) {
+                rt_pos_[i] = interp_start_pos_[i] + t * (interp_target_pos_[i] - interp_start_pos_[i]);
+                rt_vel_[i] = interp_target_vel_[i];
+            }
+            std::fill(rt_acc_.begin(), rt_acc_.end(), 0.0);
+
+            try {
+                robot_.StreamJointPosition(rt_pos_, rt_vel_, rt_acc_);
+            } catch (const std::exception& e) {
+                logger()->error("JointImpedanceControl: StreamJointPosition error: {}", e.what());
+                shm_->emergency_stop.store(true);
+                is_running_.store(false);
+                send_error = true;
+            }
+            if (!send_error) {
+                std::copy(rt_pos_.begin(), rt_pos_.end(), last_sent_pos_.begin());
+            }
+        } else {
+            // No interpolation: send command directly
+            try {
+                robot_.StreamJointPosition(rt_pos_, rt_vel_, rt_acc_);
+            } catch (const std::exception& e) {
+                logger()->error("JointImpedanceControl: StreamJointPosition error: {}", e.what());
+                shm_->emergency_stop.store(true);
+                is_running_.store(false);
+                send_error = true;
+            }
+            if (!send_error) {
+                std::copy(rt_pos_.begin(), rt_pos_.end(), last_sent_pos_.begin());
+            }
+        }
+    } else {
+        // --- Non-decimation cycle ---
+        if (interpolate_cmds_ && interp_active_) {
+            interp_current_step_++;
+
+            if (interp_current_step_ >= interp_total_steps_) {
+                // Interpolation done — snap to target
+                std::copy(interp_target_pos_.begin(), interp_target_pos_.end(), rt_pos_.begin());
+                std::fill(rt_vel_.begin(), rt_vel_.end(), 0.0);
+                interp_active_ = false;
+            } else {
+                double t = static_cast<double>(interp_current_step_)
+                         / static_cast<double>(interp_total_steps_);
+                for (size_t i = 0; i < rt_pos_.size(); ++i) {
+                    rt_pos_[i] = interp_start_pos_[i]
+                               + t * (interp_target_pos_[i] - interp_start_pos_[i]);
+                    rt_vel_[i] = interp_target_vel_[i];
+                }
+            }
+            std::fill(rt_acc_.begin(), rt_acc_.end(), 0.0);
+
+            try {
+                robot_.StreamJointPosition(rt_pos_, rt_vel_, rt_acc_);
+            } catch (const std::exception& e) {
+                logger()->error("JointImpedanceControl: StreamJointPosition error: {}", e.what());
+                shm_->emergency_stop.store(true);
+                is_running_.store(false);
+                send_error = true;
+            }
+            if (!send_error) {
+                std::copy(rt_pos_.begin(), rt_pos_.end(), last_sent_pos_.begin());
+            }
+        } else {
+            // Hold last sent position
+            try {
+                robot_.StreamJointPosition(last_sent_pos_, rt_vel_, rt_acc_);
+            } catch (const std::exception& e) {
+                logger()->error("JointImpedanceControl: StreamJointPosition error: {}", e.what());
+                shm_->emergency_stop.store(true);
+                is_running_.store(false);
+                send_error = true;
             }
         }
     }
 
-    // 4. NaN/Inf check
-    if (!CheckFinite(rt_pos_)) {
-        logger()->error("{}", "JointImpedanceControl: NaN/Inf in command positions");
-        shm_->emergency_stop.store(true);
-        is_running_.store(false);
-        return;
+    // 8. Refresh robot states — ONLY on decimation boundary cycles.
+    //    robot_.states() is expensive IPC/DDS (0.2-0.8 ms); skip on
+    //    non-decimation cycles to keep the RT callback short.
+    if (!send_error && consume_cmd) {
+        try {
+            auto rs = robot_.states();
+            std::lock_guard<std::mutex> lock(shm_mutex_);
+            shm_->state_q        = rs.q;
+            shm_->state_dq       = rs.dq;
+            shm_->state_tau      = rs.tau;
+            shm_->state_tau_ext  = rs.tau_ext;
+            shm_->state_tcp_pose = rs.tcp_pose;
+            shm_->state_sequence.fetch_add(1, std::memory_order_relaxed);
+        } catch (const std::exception& e) {
+            logger()->warn("JointImpedanceControl: states() read failed: {}", e.what());
+        }
     }
-
-    // 5. Jump check – clamp to last sent if delta too large
-    //    Threshold = max_velocity * cmd_interval → adapts to Python frequency
-    const double joint_jump_thresh = kMaxJointVelocity * cmd_interval;
-    if (!last_sent_pos_.empty()
-        && CheckJointJump(rt_pos_, last_sent_pos_, joint_jump_thresh)) {
-        std::copy(last_sent_pos_.begin(), last_sent_pos_.end(), rt_pos_.begin());
-        std::fill(rt_vel_.begin(), rt_vel_.end(), 0.0);
-        std::fill(rt_acc_.begin(), rt_acc_.end(), 0.0);
-    }
-
-    // 6. Timeout – resend last position with zero vel/acc
-    if (timed_out) {
-        std::copy(last_sent_pos_.begin(), last_sent_pos_.end(), rt_pos_.begin());
-        std::fill(rt_vel_.begin(), rt_vel_.end(), 0.0);
-        std::fill(rt_acc_.begin(), rt_acc_.end(), 0.0);
-    }
-
-    // 7. Send command
-    try {
-        robot_.StreamJointPosition(rt_pos_, rt_vel_, rt_acc_);
-    } catch (const std::exception& e) {
-        logger()->error("JointImpedanceControl: StreamJointPosition error: {}", e.what());
-        shm_->emergency_stop.store(true);
-        is_running_.store(false);
-        return;
-    }
-
-    // 8. Refresh robot states for Python-side monitoring.
-    try {
-        auto rs = robot_.states();
-        std::lock_guard<std::mutex> lock(shm_mutex_);
-        shm_->state_q        = rs.q;
-        shm_->state_dq       = rs.dq;
-        shm_->state_tau      = rs.tau;
-        shm_->state_tau_ext  = rs.tau_ext;
-        shm_->state_tcp_pose = rs.tcp_pose;
-        shm_->state_sequence.fetch_add(1, std::memory_order_relaxed);
-    } catch (const std::exception& e) {
-        logger()->warn("JointImpedanceControl: states() read failed: {}", e.what());
-    }
-
-    // 9. Update last sent (element copy, no alloc — same size)
-    std::copy(rt_pos_.begin(), rt_pos_.end(), last_sent_pos_.begin());
 }
 
 } // namespace flexiv_rt
