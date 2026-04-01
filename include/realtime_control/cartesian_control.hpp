@@ -102,7 +102,7 @@ public:
     ///   Default = 1000 (consume every cycle — original behaviour).
     ///
     /// interpolate_cmds: when true, each newly consumed Python command
-    ///   triggers a MinJerk trajectory from current pose to target over
+    ///   triggers a linear interpolation from current pose to target over
     ///   1/inner_control_hz seconds, giving smooth motion at low command rates.
     ///   Default = false (snap to command immediately, original behaviour).
     explicit CartesianMotionForceControl(
@@ -163,7 +163,7 @@ private:
 
     // Trajectory state (RT thread only — no mutex needed)
     MinJerkTrajectory      trajectory_;
-    MinJerkTrajectory      stream_interp_;  // streaming interpolation trajectory
+    LinearTrajectory       stream_interp_;  // streaming linear interpolation for VLA
     enum class RTState { STREAMING, MOVING };
     RTState                rt_state_ = RTState::STREAMING;
 

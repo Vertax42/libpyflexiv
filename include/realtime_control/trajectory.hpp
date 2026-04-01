@@ -273,4 +273,212 @@ private:
     bool     cancelled_     = false;
 };
 
+/// RT-safe linear trajectory generator for 7D poses [x,y,z, qw,qx,qy,qz].
+///
+/// Identical interface to MinJerkTrajectory but uses constant-velocity
+/// interpolation: s(t) = t / T.  Designed for streaming VLA policy commands
+/// where the robot should move at uniform speed between successive waypoints
+/// rather than decelerating to zero at each boundary.
+///
+/// Position interpolation:  linear lerp with constant velocity
+/// Rotation interpolation:  SLERP(q_start, q_end, t/T) — constant angular speed
+/// Velocity feed-forward:   constant = delta / duration
+class LinearTrajectory {
+public:
+    LinearTrajectory() noexcept = default;
+
+    /// Initialize a new trajectory.
+    /// @param start_pose  Starting pose [x,y,z, qw,qx,qy,qz]
+    /// @param end_pose    Target pose   [x,y,z, qw,qx,qy,qz]
+    /// @param duration_sec  Total trajectory duration in seconds (must be > 0).
+    void init(const std::array<double,7>& start_pose,
+              const std::array<double,7>& end_pose,
+              double duration_sec) noexcept
+    {
+        start_pose_ = start_pose;
+        end_pose_   = end_pose;
+
+        // Normalize quaternions
+        normalizeQuat(start_pose_);
+        normalizeQuat(end_pose_);
+
+        // Ensure SLERP takes the short path
+        double dot = quatDot(start_pose_, end_pose_);
+        if (dot < 0.0) {
+            end_pose_[3] = -end_pose_[3];
+            end_pose_[4] = -end_pose_[4];
+            end_pose_[5] = -end_pose_[5];
+            end_pose_[6] = -end_pose_[6];
+            dot = -dot;
+        }
+
+        // Precompute position delta
+        for (int i = 0; i < 3; ++i) {
+            pos_delta_[i] = end_pose_[i] - start_pose_[i];
+        }
+
+        // Precompute rotation axis and angle for angular velocity feedforward
+        dot = std::min(1.0, dot);
+        rot_angle_ = 2.0 * std::acos(dot);
+
+        if (rot_angle_ > 1e-6) {
+            double rx = end_pose_[4]*start_pose_[3] - end_pose_[3]*start_pose_[4]
+                      + end_pose_[6]*start_pose_[5] - end_pose_[5]*start_pose_[6];
+            double ry = end_pose_[5]*start_pose_[3] - end_pose_[3]*start_pose_[5]
+                      + end_pose_[4]*start_pose_[6] - end_pose_[6]*start_pose_[4];
+            double rz = end_pose_[6]*start_pose_[3] - end_pose_[3]*start_pose_[6]
+                      + end_pose_[5]*start_pose_[4] - end_pose_[4]*start_pose_[5];
+            double anorm = std::sqrt(rx*rx + ry*ry + rz*rz);
+            if (anorm > 1e-12) {
+                double inv = 1.0 / anorm;
+                rot_axis_[0] = rx * inv;
+                rot_axis_[1] = ry * inv;
+                rot_axis_[2] = rz * inv;
+            } else {
+                rot_axis_ = {0, 0, 0};
+                rot_angle_ = 0;
+            }
+        } else {
+            rot_axis_ = {0, 0, 0};
+            rot_angle_ = 0;
+        }
+
+        if (duration_sec <= 0.0) duration_sec = 0.001;  // minimum 1 ms
+
+        total_steps_ = static_cast<uint32_t>(duration_sec * 1000.0);  // 1 kHz
+        if (total_steps_ < 1) total_steps_ = 1;
+        duration_sec_ = static_cast<double>(total_steps_) / 1000.0;
+
+        // Precompute constant velocities
+        for (int i = 0; i < 3; ++i) {
+            const_linear_vel_[i] = pos_delta_[i] / duration_sec_;
+        }
+        for (int i = 0; i < 3; ++i) {
+            const_angular_vel_[i] = rot_angle_ * rot_axis_[i] / duration_sec_;
+        }
+
+        current_step_ = 0;
+        active_ = true;
+        cancelled_ = false;
+    }
+
+    /// Advance the trajectory by one timestep (1 ms).
+    /// @param[out] out_pose     Interpolated pose [x,y,z, qw,qx,qy,qz]
+    /// @param[out] out_velocity Feed-forward velocity [vx,vy,vz, wx,wy,wz]
+    /// @return true if trajectory is still in progress, false if finished
+    bool step(std::array<double,7>& out_pose,
+              std::array<double,6>& out_velocity) noexcept
+    {
+        if (!active_ || cancelled_) {
+            return false;
+        }
+
+        current_step_++;
+
+        // Clamp to end
+        if (current_step_ >= total_steps_) {
+            out_pose = end_pose_;
+            out_velocity = {};
+            active_ = false;
+            return false;  // trajectory complete
+        }
+
+        double t = static_cast<double>(current_step_) / static_cast<double>(total_steps_);
+
+        // Position: linear interpolation
+        for (int i = 0; i < 3; ++i) {
+            out_pose[i] = start_pose_[i] + t * pos_delta_[i];
+        }
+
+        // Rotation: SLERP with linear parameter
+        slerp(start_pose_, end_pose_, t, out_pose);
+
+        // Constant velocity feedforward
+        for (int i = 0; i < 3; ++i) {
+            out_velocity[i] = const_linear_vel_[i];
+        }
+        for (int i = 0; i < 3; ++i) {
+            out_velocity[3 + i] = const_angular_vel_[i];
+        }
+
+        return true;  // still in progress
+    }
+
+    void cancel() noexcept {
+        cancelled_ = true;
+        active_ = false;
+    }
+
+    bool isActive() const noexcept {
+        return active_ && !cancelled_;
+    }
+
+private:
+    // Reuse the same quaternion helpers as MinJerkTrajectory
+    static void normalizeQuat(std::array<double,7>& pose) noexcept {
+        double norm = std::sqrt(
+            pose[3]*pose[3] + pose[4]*pose[4] +
+            pose[5]*pose[5] + pose[6]*pose[6]);
+        if (norm < 1e-12) {
+            pose[3] = 1.0; pose[4] = 0.0; pose[5] = 0.0; pose[6] = 0.0;
+            return;
+        }
+        double inv = 1.0 / norm;
+        pose[3] *= inv; pose[4] *= inv; pose[5] *= inv; pose[6] *= inv;
+    }
+
+    static double quatDot(const std::array<double,7>& a,
+                           const std::array<double,7>& b) noexcept {
+        return a[3]*b[3] + a[4]*b[4] + a[5]*b[5] + a[6]*b[6];
+    }
+
+    static void slerp(const std::array<double,7>& p0,
+                       const std::array<double,7>& p1,
+                       double t,
+                       std::array<double,7>& out) noexcept
+    {
+        double dot = quatDot(p0, p1);
+        if (dot > 1.0)  dot = 1.0;
+        if (dot < -1.0) dot = -1.0;
+
+        double theta = std::acos(dot);
+
+        if (theta < 1e-6) {
+            for (int i = 3; i < 7; ++i) {
+                out[i] = p0[i] + t * (p1[i] - p0[i]);
+            }
+            double norm = std::sqrt(out[3]*out[3] + out[4]*out[4] +
+                                     out[5]*out[5] + out[6]*out[6]);
+            if (norm > 1e-12) {
+                double inv = 1.0 / norm;
+                out[3] *= inv; out[4] *= inv; out[5] *= inv; out[6] *= inv;
+            }
+        } else {
+            double sin_theta = std::sin(theta);
+            double w0 = std::sin((1.0 - t) * theta) / sin_theta;
+            double w1 = std::sin(t * theta) / sin_theta;
+            for (int i = 3; i < 7; ++i) {
+                out[i] = w0 * p0[i] + w1 * p1[i];
+            }
+        }
+    }
+
+    // --- State ---
+    std::array<double,7> start_pose_ = {0,0,0, 1,0,0,0};
+    std::array<double,7> end_pose_   = {0,0,0, 1,0,0,0};
+    std::array<double,3> pos_delta_  = {};
+    std::array<double,3> rot_axis_   = {};
+    double               rot_angle_  = 0;
+    double               duration_sec_ = 0;
+
+    // Precomputed constant velocities
+    std::array<double,3> const_linear_vel_  = {};
+    std::array<double,3> const_angular_vel_ = {};
+
+    uint32_t total_steps_   = 0;
+    uint32_t current_step_  = 0;
+    bool     active_        = false;
+    bool     cancelled_     = false;
+};
+
 } // namespace flexiv_rt
