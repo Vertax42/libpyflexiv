@@ -218,7 +218,7 @@ public:
     std::shared_ptr<JointImpedanceControl> start_joint_impedance_control(
         std::string task_name = "JointImpedanceRT",
         int  inner_control_hz = 1000,
-        bool interpolate_cmds = false) {
+        bool interpolate_cmds = true) {
         if (closed_.load()) {
             throw std::runtime_error("Robot is closed");
         }
@@ -667,15 +667,15 @@ PYBIND11_MODULE(_flexiv_rt, m)
              },
              py::arg("task_name")        = "JointImpedanceRT",
              py::arg("inner_control_hz") = 1000,
-             py::arg("interpolate_cmds") = false,
+             py::arg("interpolate_cmds") = true,
              "Start the RT Joint Impedance control thread.\n\n"
              "inner_control_hz: how often the RT thread (1 kHz) consumes a new\n"
              "  Python command (1-1000 Hz). Between consumption cycles the thread\n"
              "  holds (or linearly interpolates if interpolate_cmds=True) the last\n"
              "  position. Default=1000 (consume every 1 ms cycle).\n\n"
-             "interpolate_cmds: when True, each new Python command triggers linear\n"
+             "interpolate_cmds: when True (default), each new Python command triggers linear\n"
              "  interpolation over one command period for smooth motion at low\n"
-             "  command rates (e.g. 30 Hz VLA policy). Default=False.",
+             "  command rates (e.g. 30 Hz VLA policy). Set False to snap immediately.",
              py::keep_alive<0, 1>())
         .def("start_cartesian_control",
              [](PyRobot& self, const std::string& task_name,
@@ -690,7 +690,7 @@ PYBIND11_MODULE(_flexiv_rt, m)
              },
              py::arg("task_name")        = "CartesianRT",
              py::arg("inner_control_hz") = 1000,
-             py::arg("interpolate_cmds") = false,
+             py::arg("interpolate_cmds") = true,
              "Start the RT Cartesian control thread.\n\n"
              "inner_control_hz: how often the RT thread (1 kHz) consumes a new\n"
              "  Python command (1–1000 Hz). Between consumption cycles the thread\n"

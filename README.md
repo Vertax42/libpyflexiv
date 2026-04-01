@@ -28,6 +28,8 @@ Python (non-RT, ~100 Hz)              C++ RT thread (SCHED_FIFO, 1 kHz)
 | Pre-allocated RT buffers | Zero heap allocation in RT callback — uses `std::copy`, never `vector::operator=` |
 | Split-lock RT callback | `robot_.states()` (slow IPC) called **outside** the mutex; lock held only for fast memory copies. Prevents Python contention from causing timeliness failures |
 | Adaptive jump detection | Velocity-based thresholds scale with Python command frequency: `threshold = max_velocity × cmd_interval`. No manual tuning needed |
+| Per-cycle velocity/acceleration clamping | Defense-in-depth: every 1ms cycle, position delta and velocity delta are clamped to Flexiv RDK safe defaults before sending to the robot |
+| Linear interpolation for VLA streaming | Constant-velocity interpolation between sparse policy commands (e.g. 30 Hz). Avoids stop-and-go behavior of min-jerk at waypoint boundaries |
 | `mlockall()` interception | Flexiv Scheduler calls `mlockall()` which pins all process memory; in a Python+PyTorch process this can be 10+ GB and triggers OOM. We intercept via linker `--wrap` and no-op it |
 | Min-jerk trajectory in RT thread | Non-blocking `move_to_pose()` generates smooth 1 kHz commands without mode switching |
 | 500ms command timeout | Holds last position if Python crashes or hangs |
@@ -314,8 +316,8 @@ Robot(serial_number: str,
 
 | Method | Returns | Description |
 |---|---|---|
-| `start_joint_impedance_control()` | `JointImpedanceControl` | Spawns RT thread for joint streaming. Releases GIL during thread creation |
-| `start_cartesian_control()` | `CartesianMotionForceControl` | Spawns RT thread for Cartesian streaming. Releases GIL during thread creation |
+| `start_joint_impedance_control(inner_control_hz=1000, interpolate_cmds=True)` | `JointImpedanceControl` | Spawns RT thread for joint streaming. `inner_control_hz` sets how often new Python commands are consumed (1–1000). `interpolate_cmds=True` enables linear interpolation between commands. Releases GIL |
+| `start_cartesian_control(inner_control_hz=1000, interpolate_cmds=True)` | `CartesianMotionForceControl` | Spawns RT thread for Cartesian streaming. Same parameters as above. Releases GIL |
 
 Both return context managers and maintain `keep_alive` references to prevent premature GC of the `Robot` object.
 
@@ -479,11 +481,91 @@ The RT callback implements multiple safety layers, evaluated **every 1ms cycle**
 
    The command interval is clamped to [1ms, 100ms] to prevent extreme thresholds. Before the second command arrives, the default interval (10ms / 100 Hz) is used. If a jump is detected, the RT thread clamps to the last sent position with zero velocity/acceleration.
 
-4. **Command Timeout** — If no new command arrives within **500ms**, the RT thread holds the last sent position with zero velocity/acceleration. Prevents runaway if Python crashes.
+4. **Per-Cycle Velocity/Acceleration Clamping** — Every 1ms cycle, **before** sending any command to the robot SDK, position deltas and velocity deltas are clamped to safe limits. This provides defense-in-depth even if interpolation or upstream code produces unexpected values.
 
-5. **Context Manager Cleanup** — `with robot.start_*_control() as ctrl:` guarantees `ctrl.stop()` is called even on exceptions, preventing orphaned RT threads.
+   **Cartesian clamping** (`ClampCartesianPose` + `ClampCartesianVelocity` in `rt_common.hpp`):
 
-6. **Idempotent Stop** — `stop()` uses `atomic<bool>` to ensure it's safe to call multiple times from multiple threads.
+   | Limit | Value | Per-Cycle Delta | Source |
+   |---|---|---|---|
+   | Linear velocity | 0.5 m/s | 0.5 mm/cycle | `SendCartesianMotionForce` default |
+   | Angular velocity | 1.0 rad/s | 0.001 rad/cycle | `SendCartesianMotionForce` default |
+   | Linear acceleration | 2.0 m/s² | 0.002 m/s per cycle | `SendCartesianMotionForce` default |
+   | Angular acceleration | 5.0 rad/s² | 0.005 rad/s per cycle | `SendCartesianMotionForce` default |
+
+   Position is clamped by Euclidean distance (preserving direction); rotation is clamped by angular distance using SLERP. Velocity feedforward is clamped by magnitude; acceleration is clamped per-axis.
+
+   **Joint clamping** (`ClampJointPosition` + `ClampJointVelocity` in `rt_common.hpp`):
+
+   | Limit | Value | Per-Cycle Delta | Source |
+   |---|---|---|---|
+   | Joint velocity | 2.0 rad/s | 0.002 rad/cycle | Flexiv RDK examples |
+   | Joint acceleration | 3.0 rad/s² | 0.003 rad/s per cycle | Flexiv RDK examples |
+
+   Joint position and velocity are clamped per-joint independently.
+
+5. **Command Timeout** — If no new command arrives within **500ms**, the RT thread holds the last sent position with zero velocity/acceleration. Prevents runaway if Python crashes.
+
+6. **Context Manager Cleanup** — `with robot.start_*_control() as ctrl:` guarantees `ctrl.stop()` is called even on exceptions, preventing orphaned RT threads.
+
+7. **Idempotent Stop** — `stop()` uses `atomic<bool>` to ensure it's safe to call multiple times from multiple threads.
+
+## Streaming Interpolation for VLA Policies
+
+When using Vision-Language-Action (VLA) models like OpenPI, the policy outputs actions at a low frequency (e.g. 30 Hz) as discrete samples of a continuous trajectory. Without interpolation, the RT thread would hold the same position between commands and then snap to the next target, causing jerky motion.
+
+The `inner_control_hz` and `interpolate_cmds` parameters solve this:
+
+```python
+# 30Hz VLA policy → smooth 1kHz motion via linear interpolation
+with robot.start_cartesian_control(inner_control_hz=30, interpolate_cmds=True) as ctrl:
+    for action in policy_actions:
+        ctrl.set_target_pose(action)
+        time.sleep(1/30)
+
+# Same for joint control
+with robot.start_joint_impedance_control(inner_control_hz=30, interpolate_cmds=True) as ctrl:
+    for action in policy_actions:
+        ctrl.set_target_joints(action)
+        time.sleep(1/30)
+```
+
+### How It Works
+
+The RT thread always runs at 1 kHz. The `inner_control_hz` parameter adds a **frequency decimator**: `decimation = round(1000 / inner_control_hz)`. The RT thread only reads a new Python command every `decimation` cycles.
+
+When `interpolate_cmds=True`, each new command triggers **constant-velocity linear interpolation** from the current position to the target over one command period:
+
+```
+Position: pos(t) = start + (end - start) × t/T       (constant velocity)
+Rotation: SLERP(q_start, q_end, t/T)                  (constant angular velocity)
+Velocity feedforward: v = (end - start) / T            (constant)
+```
+
+This produces a **flat velocity profile** between waypoints — no deceleration at boundaries:
+
+```
+Linear interpolation (what we use):         Min-jerk (what we DON'T use):
+velocity                                    velocity
+  ^                                           ^
+  |  ________  ________  ________             |   ╱╲    ╱╲    ╱╲
+  | |        ||        ||        |            |  ╱  ╲  ╱  ╲  ╱  ╲
+  +------------------------------→ time       +------------------------------→ time
+    A        B         C        D               A     B     C     D
+```
+
+### Why Linear, Not Min-Jerk
+
+Min-jerk (5th-order polynomial) ensures zero velocity at start and end of each segment. This is ideal for explicit trajectory moves (`move_to_pose()`), but **wrong for streaming VLA commands** where actions are continuous samples:
+
+- Min-jerk decelerates to zero at every 33ms boundary → **stop-and-go sawtooth** velocity
+- Average speed drops to ~60% of expected
+- 30 Hz periodic acceleration/deceleration causes visible vibration
+
+Linear interpolation treats each action as a waypoint to pass through at constant speed, matching the VLA policy's intent.
+
+### Decimation and `robot_.states()` Optimization
+
+The `robot_.states()` IPC call costs 0.2–0.8 ms per invocation. When using decimation (e.g. `inner_control_hz=30` → `decimation=33`), `robot_.states()` is only called on decimation boundary cycles, keeping non-boundary cycles extremely short. State staleness is at most `decimation` ms, which is invisible to the Python control loop.
 
 ## Min-Jerk Trajectory
 
@@ -510,16 +592,17 @@ libpyflexiv/
 ├── setup.py                        # pip install support
 ├── flexiv_rdk/                     # Flexiv RDK v1.8 SDK submodule
 ├── include/realtime_control/       # C++ RT control headers
-│   ├── rt_common.hpp               #   Safety constants & check functions
+│   ├── rt_common.hpp               #   Safety constants, checks, per-cycle clamping
 │   ├── shared_memory.hpp           #   SPSC ring buffer (alternative design)
 │   ├── joint_state.hpp             #   JointState struct
 │   ├── cartesian_state.hpp         #   CartesianState struct
 │   ├── joint_impedance_control.hpp #   Joint RT controller declaration
 │   ├── cartesian_control.hpp       #   Cartesian RT controller declaration
-│   └── trajectory.hpp              #   Min-jerk trajectory generator
+│   ├── trajectory.hpp              #   MinJerkTrajectory + LinearTrajectory
+│   └── logging.hpp                 #   Logger setup
 ├── src/                            # C++ implementation
 │   ├── flexiv_rt.cpp               #   Pybind11 module (Robot, controls, enums)
-│   ├── joint_impedance_control.cpp #   Joint RT callback implementation
+│   ├── joint_impedance_control.cpp #   Joint RT callback + linear interpolation
 │   └── cartesian_control.cpp       #   Cartesian RT callback + mlockall wrap
 ├── flexiv_rt/                      # Python package
 │   ├── __init__.py                 #   Re-exports from compiled .so
@@ -529,11 +612,86 @@ libpyflexiv/
 │   ├── cartesian_motion_example.py #   Cartesian Y-axis sine demo
 │   └── rt_reset_example.py         #   Non-blocking trajectory reset demo
 └── tests/
-    ├── cpp/test_rt_safety.cpp      #   C++ unit tests (safety functions, buffer)
+    ├── cpp/
+    │   ├── CMakeLists.txt          #   GTest build config
+    │   ├── test_rt_safety.cpp      #   Safety functions, buffer, clamping tests
+    │   └── test_trajectory.cpp     #   LinearTrajectory + MinJerkTrajectory tests
     └── python/
         ├── conftest.py             #   Pytest fixtures (robot connection)
-        └── test_rt_integration.py  #   Integration tests (requires real robot)
+        ├── test_rt_integration.py  #   Integration tests (requires real robot)
+        └── test_interpolation_sim.py # Interpolation simulation (no robot needed)
 ```
+
+## Tests
+
+Three test suites, covering different layers without requiring a real robot (except integration tests).
+
+### C++ Unit Tests (GTest, no robot required)
+
+Build and run:
+
+```bash
+cd tests/cpp
+mkdir -p build && cd build
+cmake .. && make -j$(nproc)
+./test_rt_safety      # 45 tests: safety checks, buffer, per-cycle clamping
+./test_trajectory     # 14 tests: LinearTrajectory, MinJerkTrajectory, VLA streaming sim
+```
+
+**test_rt_safety.cpp** — 45 tests across 10 suites:
+
+| Suite | Tests | What it covers |
+|---|---|---|
+| `QuatAngularDist` | 5 | Quaternion angular distance (identity, small/large rotation, antipodal) |
+| `CheckFinite` | 6 | NaN/Inf detection on vectors and arrays |
+| `CheckJointJump` | 4 | Joint position jump detection (threshold, size mismatch, edge cases) |
+| `CheckCartesianJump` | 4 | Position + rotation jump detection |
+| `CacheLineAlign` | 1 | Cache line size constant verification |
+| `RealTimeBuffer` | 11 | SPSC ring buffer: FIFO, wrap-around, full rejection, concurrent stress (100k items) |
+| `ClampCartesianPose` | 5 | Position Euclidean clamping, rotation angular clamping via SLERP, diagonal direction preservation |
+| `ClampCartesianVelocity` | 4 | Linear/angular velocity magnitude clamping, linear acceleration clamping |
+| `ClampJointPosition` | 3 | Per-joint velocity limiting (positive/negative delta) |
+| `ClampJointVelocity` | 2 | Per-joint acceleration limiting |
+
+**test_trajectory.cpp** — 14 tests across 3 suites:
+
+| Suite | Tests | What it covers |
+|---|---|---|
+| `LinearTrajectory` | 11 | Constant velocity, linear position, SLERP constant angular velocity, halfway angle accuracy, combined translation+rotation, monotonic progress, zero motion, cancel, min duration, inactive before init, **VLA streaming simulation (no zero-velocity dips)** |
+| `TrajectoryComparison` | 2 | Linear has constant velocity vs MinJerk varies; both reach same end pose |
+| `MinJerkTrajectory` | 1 | Confirms stop-and-go: first-step velocity near zero at every segment boundary |
+
+### Python Simulation Tests (no robot required)
+
+```bash
+# Run assertions only
+python tests/python/test_interpolation_sim.py
+
+# Also generate comparison plots
+python tests/python/test_interpolation_sim.py --plot
+```
+
+**test_interpolation_sim.py** — 7 tests:
+
+| Test | What it validates |
+|---|---|
+| Cartesian linear: constant velocity | Velocity deviation < 1e-10 across all 1kHz cycles |
+| Cartesian min-jerk: stop-and-go | Confirms first-step velocity near zero at each segment boundary |
+| Joint linear: constant velocity | All 7 joints have constant velocity, final position exact |
+| Joint min-jerk: velocity varies | Velocity range within each segment > 0.01 (not constant) |
+| Rotation SLERP: constant angular velocity | Position stays constant during pure rotation |
+| End position accuracy | Final position error < 1e-10 after 50 random waypoints |
+| Multiple policy frequencies | Linear interpolation correct at 10/20/30/50/100/200/500 Hz |
+
+The `--plot` flag generates `interpolation_comparison.png` showing linear vs min-jerk velocity profiles side-by-side for both Cartesian and joint control.
+
+### Integration Tests (requires real robot)
+
+```bash
+sudo -E pytest tests/python/ --robot-sn Rizon4s-XXXXXX -v -s --timeout=120
+```
+
+Requires a physical Flexiv robot connected on the network. See `tests/python/conftest.py` for fixtures and `test_rt_integration.py` for the full test suite (23 tests covering connection, mode switching, joint/Cartesian control, safety, and lerobot compatibility).
 
 ## License
 
