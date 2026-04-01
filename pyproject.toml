@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "flexiv_rt"
-version = "0.2.0"
+version = "0.2.1"
 description = "Python bindings for Flexiv RDK real-time control"
 requires-python = ">=3.8"
 dependencies = ["pybind11"]
