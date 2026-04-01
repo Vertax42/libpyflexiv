@@ -47,7 +47,7 @@ public:
         std::unique_ptr<flexiv::rdk::Scheduler> pre_scheduler = nullptr,
         std::string task_name = "JointImpedanceRT",
         int  inner_control_hz = 1000,
-        bool interpolate_cmds = false);
+        bool interpolate_cmds = true);
     ~JointImpedanceControl();
 
     // Python-thread-safe API
@@ -78,6 +78,7 @@ private:
     std::vector<double>    rt_pos_;
     std::vector<double>    rt_vel_;
     std::vector<double>    rt_acc_;
+    std::vector<double>    last_sent_vel_;  // for per-cycle acceleration clamping
 
     // --- Frequency decimation (RT thread only — no mutex needed) ---
     int  cmd_decimation_{1};

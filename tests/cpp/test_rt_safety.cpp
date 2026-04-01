@@ -286,3 +286,139 @@ TEST(RealTimeBuffer, ConcurrentSPSC) {
         EXPECT_EQ(received[i], i) << "Mismatch at index " << i;
     }
 }
+
+// ============================================================================
+// ClampCartesianPose
+// ============================================================================
+
+TEST(ClampCartesianPose, PositionWithin) {
+    // Small move within limit: 0.5 m/s * 0.001s = 0.5mm per cycle
+    std::array<double, 7> pose = {0.0001, 0.0, 0.0, 1, 0, 0, 0};  // 0.1mm
+    std::array<double, 7> last = {0.0, 0.0, 0.0, 1, 0, 0, 0};
+    EXPECT_FALSE(ClampCartesianPose(pose, last));
+    EXPECT_NEAR(pose[0], 0.0001, 1e-12);  // unchanged
+}
+
+TEST(ClampCartesianPose, PositionExceeds) {
+    // Large move: 10mm in one cycle, limit = 0.5mm
+    std::array<double, 7> pose = {0.01, 0.0, 0.0, 1, 0, 0, 0};
+    std::array<double, 7> last = {0.0, 0.0, 0.0, 1, 0, 0, 0};
+    EXPECT_TRUE(ClampCartesianPose(pose, last));
+    double dist = std::sqrt(pose[0]*pose[0] + pose[1]*pose[1] + pose[2]*pose[2]);
+    double max_d = kCartMaxLinearVel * kRtDt;
+    EXPECT_NEAR(dist, max_d, 1e-10);
+}
+
+TEST(ClampCartesianPose, PositionExceedsDiagonal) {
+    // Diagonal move: 10mm in X and Y
+    std::array<double, 7> pose = {0.01, 0.01, 0.0, 1, 0, 0, 0};
+    std::array<double, 7> last = {0.0, 0.0, 0.0, 1, 0, 0, 0};
+    EXPECT_TRUE(ClampCartesianPose(pose, last));
+    double dist = std::sqrt(pose[0]*pose[0] + pose[1]*pose[1] + pose[2]*pose[2]);
+    EXPECT_NEAR(dist, kCartMaxLinearVel * kRtDt, 1e-10);
+    // Direction preserved: X and Y should be equal
+    EXPECT_NEAR(pose[0], pose[1], 1e-12);
+}
+
+TEST(ClampCartesianPose, RotationWithin) {
+    // Small rotation within limit: 1.0 rad/s * 0.001s = 0.001 rad per cycle
+    double half = 0.0005 / 2.0;  // 0.0005 rad rotation
+    std::array<double, 7> pose = {0, 0, 0, std::cos(half), 0, 0, std::sin(half)};
+    std::array<double, 7> last = {0, 0, 0, 1, 0, 0, 0};
+    EXPECT_FALSE(ClampCartesianPose(pose, last));
+}
+
+TEST(ClampCartesianPose, RotationExceeds) {
+    // Large rotation: 45 degrees in one cycle, limit = 0.001 rad
+    double half = 45.0 * M_PI / 180.0 / 2.0;
+    std::array<double, 7> pose = {0, 0, 0, std::cos(half), 0, 0, std::sin(half)};
+    std::array<double, 7> last = {0, 0, 0, 1, 0, 0, 0};
+    EXPECT_TRUE(ClampCartesianPose(pose, last));
+    double angle = QuatAngularDist(pose, last);
+    double max_r = kCartMaxAngularVel * kRtDt;
+    EXPECT_NEAR(angle, max_r, 1e-6);
+}
+
+// ============================================================================
+// ClampCartesianVelocity
+// ============================================================================
+
+TEST(ClampCartesianVelocity, AllWithin) {
+    std::array<double, 6> vel      = {0.1, 0.1, 0.1, 0.3, 0.3, 0.3};
+    std::array<double, 6> last_vel = {0.1, 0.1, 0.1, 0.3, 0.3, 0.3};
+    EXPECT_FALSE(ClampCartesianVelocity(vel, last_vel));
+}
+
+TEST(ClampCartesianVelocity, LinearVelocityExceeds) {
+    std::array<double, 6> vel      = {1.0, 0.0, 0.0, 0.0, 0.0, 0.0};  // 1 m/s > 0.5
+    std::array<double, 6> last_vel = {0.5, 0.0, 0.0, 0.0, 0.0, 0.0};  // at limit, no acc trigger
+    EXPECT_TRUE(ClampCartesianVelocity(vel, last_vel));
+    double v = std::sqrt(vel[0]*vel[0] + vel[1]*vel[1] + vel[2]*vel[2]);
+    EXPECT_NEAR(v, kCartMaxLinearVel, 1e-10);
+}
+
+TEST(ClampCartesianVelocity, AngularVelocityExceeds) {
+    std::array<double, 6> vel      = {0.0, 0.0, 0.0, 2.0, 0.0, 0.0};  // 2 rad/s > 1.0
+    std::array<double, 6> last_vel = {0.0, 0.0, 0.0, 1.0, 0.0, 0.0};  // at limit, no acc trigger
+    EXPECT_TRUE(ClampCartesianVelocity(vel, last_vel));
+    double w = std::sqrt(vel[3]*vel[3] + vel[4]*vel[4] + vel[5]*vel[5]);
+    EXPECT_NEAR(w, kCartMaxAngularVel, 1e-10);
+}
+
+TEST(ClampCartesianVelocity, LinearAccelerationExceeds) {
+    // Velocity jump from 0 to 0.4: dv = 0.4, max_dv = 2.0 * 0.001 = 0.002
+    std::array<double, 6> vel      = {0.4, 0.0, 0.0, 0.0, 0.0, 0.0};
+    std::array<double, 6> last_vel = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
+    EXPECT_TRUE(ClampCartesianVelocity(vel, last_vel));
+    double max_dv = kCartMaxLinearAcc * kRtDt;
+    EXPECT_NEAR(vel[0], max_dv, 1e-10);
+}
+
+// ============================================================================
+// ClampJointPosition
+// ============================================================================
+
+TEST(ClampJointPosition, AllWithin) {
+    std::vector<double> pos  = {0.0, 0.001, 0.002, 0.001, 0.0, 0.001, 0.002};
+    std::vector<double> last = {0.0, 0.0,   0.0,   0.0,   0.0, 0.0,   0.0};
+    // max delta = 2.0 * 0.001 = 0.002 rad
+    EXPECT_FALSE(ClampJointPosition(pos, last));
+}
+
+TEST(ClampJointPosition, OneJointExceeds) {
+    std::vector<double> pos  = {0.0, 0.0, 0.0, 0.1, 0.0, 0.0, 0.0};  // 0.1 rad jump
+    std::vector<double> last = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
+    EXPECT_TRUE(ClampJointPosition(pos, last));
+    double max_delta = kJointMaxVel * kRtDt;
+    EXPECT_NEAR(pos[3], max_delta, 1e-10);
+    EXPECT_NEAR(pos[0], 0.0, 1e-12);  // other joints unchanged
+}
+
+TEST(ClampJointPosition, NegativeDelta) {
+    std::vector<double> pos  = {0.0, 0.0, 0.0, -0.1, 0.0, 0.0, 0.0};
+    std::vector<double> last = {0.0, 0.0, 0.0,  0.0, 0.0, 0.0, 0.0};
+    EXPECT_TRUE(ClampJointPosition(pos, last));
+    double max_delta = kJointMaxVel * kRtDt;
+    EXPECT_NEAR(pos[3], -max_delta, 1e-10);
+}
+
+// ============================================================================
+// ClampJointVelocity
+// ============================================================================
+
+TEST(ClampJointVelocity, AllWithin) {
+    std::vector<double> vel      = {0.001, 0.002, 0.001, 0.001, 0.002, 0.001, 0.001};
+    std::vector<double> last_vel = {0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0};
+    // max dv = 3.0 * 0.001 = 0.003 rad/s
+    EXPECT_FALSE(ClampJointVelocity(vel, last_vel));
+}
+
+TEST(ClampJointVelocity, AccelerationExceeds) {
+    // Velocity jump: 0 to 1.0 rad/s, max_dv = 0.003
+    std::vector<double> vel      = {0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0};
+    std::vector<double> last_vel = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
+    EXPECT_TRUE(ClampJointVelocity(vel, last_vel));
+    double max_dv = kJointMaxAcc * kRtDt;
+    EXPECT_NEAR(vel[1], max_dv, 1e-10);
+    EXPECT_NEAR(vel[0], 0.0, 1e-12);  // other joints unchanged
+}

@@ -45,6 +45,7 @@ JointImpedanceControl::JointImpedanceControl(
     rt_pos_ = s.q;
     rt_vel_.assign(n, 0.0);
     rt_acc_.assign(n, 0.0);
+    last_sent_vel_.assign(n, 0.0);
 
     // Pre-allocate interpolation buffers
     interp_start_pos_.assign(n, 0.0);
@@ -247,6 +248,10 @@ void JointImpedanceControl::PeriodicCallback()
             }
             std::fill(rt_acc_.begin(), rt_acc_.end(), 0.0);
 
+            // Clamp velocity and acceleration before sending
+            ClampJointPosition(rt_pos_, last_sent_pos_);
+            ClampJointVelocity(rt_vel_, last_sent_vel_);
+
             try {
                 robot_.StreamJointPosition(rt_pos_, rt_vel_, rt_acc_);
             } catch (const std::exception& e) {
@@ -257,9 +262,13 @@ void JointImpedanceControl::PeriodicCallback()
             }
             if (!send_error) {
                 std::copy(rt_pos_.begin(), rt_pos_.end(), last_sent_pos_.begin());
+                std::copy(rt_vel_.begin(), rt_vel_.end(), last_sent_vel_.begin());
             }
         } else {
-            // No interpolation: send command directly
+            // No interpolation: send command directly — clamp first
+            ClampJointPosition(rt_pos_, last_sent_pos_);
+            ClampJointVelocity(rt_vel_, last_sent_vel_);
+
             try {
                 robot_.StreamJointPosition(rt_pos_, rt_vel_, rt_acc_);
             } catch (const std::exception& e) {
@@ -270,6 +279,7 @@ void JointImpedanceControl::PeriodicCallback()
             }
             if (!send_error) {
                 std::copy(rt_pos_.begin(), rt_pos_.end(), last_sent_pos_.begin());
+                std::copy(rt_vel_.begin(), rt_vel_.end(), last_sent_vel_.begin());
             }
         }
     } else {
@@ -293,6 +303,10 @@ void JointImpedanceControl::PeriodicCallback()
             }
             std::fill(rt_acc_.begin(), rt_acc_.end(), 0.0);
 
+            // Clamp before sending
+            ClampJointPosition(rt_pos_, last_sent_pos_);
+            ClampJointVelocity(rt_vel_, last_sent_vel_);
+
             try {
                 robot_.StreamJointPosition(rt_pos_, rt_vel_, rt_acc_);
             } catch (const std::exception& e) {
@@ -303,6 +317,7 @@ void JointImpedanceControl::PeriodicCallback()
             }
             if (!send_error) {
                 std::copy(rt_pos_.begin(), rt_pos_.end(), last_sent_pos_.begin());
+                std::copy(rt_vel_.begin(), rt_vel_.end(), last_sent_vel_.begin());
             }
         } else {
             // Hold last sent position

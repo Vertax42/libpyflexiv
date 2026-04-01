@@ -371,6 +371,7 @@ void CartesianMotionForceControl::PeriodicCallback()
                 is_running_.store(false);
                 send_error = true;
             }
+            if (!send_error) last_sent_vel_ = {};
         } else if (!CheckFinite(interp_pose)) {
             // NaN/Inf check
             logger()->error("{}", "CartesianMotionForceControl: NaN/Inf in trajectory pose");
@@ -379,7 +380,9 @@ void CartesianMotionForceControl::PeriodicCallback()
             shm_->is_moving.store(false);
             send_error = true;
         } else {
-            // Send interpolated command
+            // Send interpolated command — clamp velocity/acceleration first
+            ClampCartesianPose(interp_pose, last_sent_pose_);
+            ClampCartesianVelocity(interp_velocity, last_sent_vel_);
             try {
                 robot_.StreamCartesianMotionForce(
                     interp_pose, {}, interp_velocity, {});
@@ -392,6 +395,7 @@ void CartesianMotionForceControl::PeriodicCallback()
             }
             if (!send_error) {
                 last_sent_pose_ = interp_pose;
+                last_sent_vel_  = interp_velocity;
             }
         }
     } else {
@@ -410,6 +414,9 @@ void CartesianMotionForceControl::PeriodicCallback()
                     interp_vel  = {};
                 }
             }
+            // Clamp before sending
+            ClampCartesianPose(interp_pose, last_sent_pose_);
+            ClampCartesianVelocity(interp_vel, last_sent_vel_);
             try {
                 robot_.StreamCartesianMotionForce(interp_pose, {}, interp_vel, {});
             } catch (const std::exception& e) {
@@ -418,7 +425,10 @@ void CartesianMotionForceControl::PeriodicCallback()
                 is_running_.store(false);
                 send_error = true;
             }
-            if (!send_error) last_sent_pose_ = interp_pose;
+            if (!send_error) {
+                last_sent_pose_ = interp_pose;
+                last_sent_vel_  = interp_vel;
+            }
 
         } else {
             // Decimation boundary cycle: process new Python command.
@@ -461,6 +471,9 @@ void CartesianMotionForceControl::PeriodicCallback()
                     std::array<double,7> interp_pose;
                     std::array<double,6> interp_vel;
                     stream_interp_.step(interp_pose, interp_vel);
+                    // Clamp before sending
+                    ClampCartesianPose(interp_pose, last_sent_pose_);
+                    ClampCartesianVelocity(interp_vel, last_sent_vel_);
                     try {
                         robot_.StreamCartesianMotionForce(interp_pose, cmd.wrench, interp_vel, {});
                     } catch (const std::exception& e) {
@@ -469,9 +482,14 @@ void CartesianMotionForceControl::PeriodicCallback()
                         is_running_.store(false);
                         send_error = true;
                     }
-                    if (!send_error) last_sent_pose_ = interp_pose;
+                    if (!send_error) {
+                        last_sent_pose_ = interp_pose;
+                        last_sent_vel_  = interp_vel;
+                    }
                 } else {
-                    // No interpolation: snap to command immediately
+                    // No interpolation: snap to command — clamp first
+                    ClampCartesianPose(cmd.pose, last_sent_pose_);
+                    ClampCartesianVelocity(cmd.velocity, last_sent_vel_);
                     try {
                         robot_.StreamCartesianMotionForce(
                             cmd.pose, cmd.wrench, cmd.velocity, cmd.acceleration);
@@ -481,7 +499,10 @@ void CartesianMotionForceControl::PeriodicCallback()
                         is_running_.store(false);
                         send_error = true;
                     }
-                    if (!send_error) last_sent_pose_ = cmd.pose;
+                    if (!send_error) {
+                        last_sent_pose_ = cmd.pose;
+                        last_sent_vel_  = cmd.velocity;
+                    }
                 }
             }
         }

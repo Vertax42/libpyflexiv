@@ -110,7 +110,7 @@ public:
         std::unique_ptr<flexiv::rdk::Scheduler> pre_scheduler = nullptr,
         std::string task_name        = "CartesianRT",
         int         inner_control_hz = 1000,
-        bool        interpolate_cmds = false);
+        bool        interpolate_cmds = true);
 
     /// Pre-started constructor: Scheduler is already running an idle proxy.
     /// Just activates the callback — near-instant.
@@ -118,7 +118,7 @@ public:
         flexiv::rdk::Robot& robot,
         PrestartedScheduler prestarted,
         int  inner_control_hz = 1000,
-        bool interpolate_cmds = false);
+        bool interpolate_cmds = true);
 
     ~CartesianMotionForceControl();
 
@@ -151,6 +151,7 @@ private:
     std::shared_ptr<RTCallbackProxy>       proxy_;   // kept alive for pre-started path
     std::mutex             shm_mutex_;
     std::array<double,7>   last_sent_pose_;
+    std::array<double,6>   last_sent_vel_ = {};  // for per-cycle acceleration clamping
     std::atomic<bool>      is_running_{true};
     std::atomic<bool>      stopped_{false};   // guards against double-stop
 
