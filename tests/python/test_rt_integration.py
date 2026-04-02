@@ -3,6 +3,8 @@ Flexiv RT integration tests — requires a real robot.
 
 Run with:
     sudo -E pytest tests/python/ --robot-sn Rizon4s-XXXXXX -v -s --timeout=120
+    sudo -E pytest tests/python/ --lerobot-bi-mount-type side --arm-side left -v -s --timeout=120
+    sudo -E pytest tests/python/ --lerobot-bi-mount-type side --arm-side right -v -s --timeout=120
 """
 
 import math
