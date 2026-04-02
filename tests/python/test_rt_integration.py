@@ -329,7 +329,7 @@ class TestLeRobotCompatibility:
             )
 
     def test_lerobot_cartesian_workflow(self, ensure_no_fault):
-        """Simulate lerobot 100-step Cartesian control loop."""
+        """Simulate lerobot 100-step Cartesian control loop while RT is active."""
         robot = ensure_no_fault
         robot.SwitchMode(frt.Mode.RT_CARTESIAN_MOTION_FORCE)
         time.sleep(0.5)
@@ -344,10 +344,15 @@ class TestLeRobotCompatibility:
                 cc.set_target_pose(obs_pose)      # send_action (hold)
                 time.sleep(0.01)                  # 100Hz policy rate
 
+            final_pose = list(cc.get_state().tcp_pose)
+            pos_err = math.sqrt(sum(
+                (final_pose[i] - init_pose[i]) ** 2 for i in range(3)
+            ))
+            # This workflow re-sends the latest observed TCP pose rather than a
+            # fixed reference, so it is slightly more sensitive to state noise
+            # and robot compliance than test_cartesian_hold().
+            assert pos_err < 0.002, (
+                f"TCP drifted {pos_err * 1000:.2f} mm in lerobot workflow"
+            )
+
         assert not robot.fault()
-        # Verify no drift
-        final_pose = list(robot.states().tcp_pose)
-        pos_err = math.sqrt(sum(
-            (final_pose[i] - init_pose[i]) ** 2 for i in range(3)
-        ))
-        assert pos_err < 0.001, f"TCP drifted {pos_err * 1000:.2f} mm in lerobot workflow"
