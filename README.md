@@ -316,8 +316,8 @@ Robot(serial_number: str,
 
 | Method | Returns | Description |
 |---|---|---|
-| `start_joint_impedance_control(inner_control_hz=200, interpolate_cmds=True)` | `JointImpedanceControl` | Spawns RT thread for joint streaming. `inner_control_hz` sets how often new Python commands are consumed (1–1000). `interpolate_cmds=True` enables linear interpolation between commands. Releases GIL |
-| `start_cartesian_control(inner_control_hz=200, interpolate_cmds=True)` | `CartesianMotionForceControl` | Spawns RT thread for Cartesian streaming. Same parameters as above. Releases GIL |
+| `start_joint_impedance_control(inner_control_hz=1000, interpolate_cmds=True)` | `JointImpedanceControl` | Spawns RT thread for joint streaming. `inner_control_hz` sets how often new Python commands are consumed (1–1000). `interpolate_cmds=True` enables linear interpolation between commands. Releases GIL |
+| `start_cartesian_control(inner_control_hz=1000, interpolate_cmds=True)` | `CartesianMotionForceControl` | Spawns RT thread for Cartesian streaming. Same parameters as above. Releases GIL |
 
 Both return context managers and maintain `keep_alive` references to prevent premature GC of the `Robot` object.
 
