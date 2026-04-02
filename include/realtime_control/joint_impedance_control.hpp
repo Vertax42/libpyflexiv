@@ -39,14 +39,14 @@ struct JointSharedMemory {
 class JointImpedanceControl {
 public:
     /// @param inner_control_hz  How often the RT callback consumes a new Python
-    ///   command (1-1000 Hz). Default=1000 (consume every 1 ms cycle).
+    ///   command (1-1000 Hz). Default=200 (consume every 5 ms cycle).
     /// @param interpolate_cmds  When true, linearly interpolate between commands
     ///   for smooth streaming at low command rates (e.g. 30 Hz VLA policy).
     explicit JointImpedanceControl(
         flexiv::rdk::Robot& robot,
         std::unique_ptr<flexiv::rdk::Scheduler> pre_scheduler = nullptr,
         std::string task_name = "JointImpedanceRT",
-        int  inner_control_hz = 1000,
+        int  inner_control_hz = 200,
         bool interpolate_cmds = true);
     ~JointImpedanceControl();
 

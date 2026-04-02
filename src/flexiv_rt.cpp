@@ -217,7 +217,7 @@ public:
     // ── RT control entry points ──
     std::shared_ptr<JointImpedanceControl> start_joint_impedance_control(
         std::string task_name = "JointImpedanceRT",
-        int  inner_control_hz = 1000,
+        int  inner_control_hz = 200,
         bool interpolate_cmds = true) {
         if (closed_.load()) {
             throw std::runtime_error("Robot is closed");
@@ -231,7 +231,7 @@ public:
     }
     std::shared_ptr<CartesianMotionForceControl> start_cartesian_control(
         std::string task_name        = "CartesianRT",
-        int         inner_control_hz = 1000,
+        int         inner_control_hz = 200,
         bool        interpolate_cmds = false) {
         if (closed_.load()) {
             throw std::runtime_error("Robot is closed");
@@ -666,13 +666,13 @@ PYBIND11_MODULE(_flexiv_rt, m)
                  return std::make_shared<PyJointImpedanceControl>(ctrl);
              },
              py::arg("task_name")        = "JointImpedanceRT",
-             py::arg("inner_control_hz") = 1000,
+             py::arg("inner_control_hz") = 200,
              py::arg("interpolate_cmds") = true,
              "Start the RT Joint Impedance control thread.\n\n"
              "inner_control_hz: how often the RT thread (1 kHz) consumes a new\n"
              "  Python command (1-1000 Hz). Between consumption cycles the thread\n"
              "  holds (or linearly interpolates if interpolate_cmds=True) the last\n"
-             "  position. Default=1000 (consume every 1 ms cycle).\n\n"
+             "  position. Default=200 (consume every 5 ms cycle).\n\n"
              "interpolate_cmds: when True (default), each new Python command triggers linear\n"
              "  interpolation over one command period for smooth motion at low\n"
              "  command rates (e.g. 30 Hz VLA policy). Set False to snap immediately.",
@@ -689,13 +689,13 @@ PYBIND11_MODULE(_flexiv_rt, m)
                  return std::make_shared<PyCartesianMotionForceControl>(ctrl);
              },
              py::arg("task_name")        = "CartesianRT",
-             py::arg("inner_control_hz") = 1000,
+             py::arg("inner_control_hz") = 200,
              py::arg("interpolate_cmds") = true,
              "Start the RT Cartesian control thread.\n\n"
              "inner_control_hz: how often the RT thread (1 kHz) consumes a new\n"
              "  Python command (1–1000 Hz). Between consumption cycles the thread\n"
              "  holds (or interpolates if interpolate_cmds=True) the last pose.\n"
-             "  Default=1000 (original behaviour: consume every 1 ms cycle).\n\n"
+             "  Default=200 (consume every 5 ms cycle).\n\n"
              "interpolate_cmds: when True, each new Python command triggers linear\n"
              "  interpolation over one command period for smooth motion at low\n"
              "  command rates (e.g. 30 Hz VLA policy). Default=False.",

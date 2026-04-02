@@ -99,7 +99,7 @@ public:
     ///   command (1–1000 Hz). The Scheduler always runs at 1 kHz (required
     ///   by Flexiv SDK); this parameter adds an N-cycle decimator on top.
     ///   Between command consumption cycles the RT thread holds / interpolates.
-    ///   Default = 1000 (consume every cycle — original behaviour).
+    ///   Default = 200 (consume every 5 cycles / 5 ms).
     ///
     /// interpolate_cmds: when true, each newly consumed Python command
     ///   triggers a linear interpolation from current pose to target over
@@ -109,7 +109,7 @@ public:
         flexiv::rdk::Robot& robot,
         std::unique_ptr<flexiv::rdk::Scheduler> pre_scheduler = nullptr,
         std::string task_name        = "CartesianRT",
-        int         inner_control_hz = 1000,
+        int         inner_control_hz = 200,
         bool        interpolate_cmds = true);
 
     /// Pre-started constructor: Scheduler is already running an idle proxy.
@@ -117,7 +117,7 @@ public:
     CartesianMotionForceControl(
         flexiv::rdk::Robot& robot,
         PrestartedScheduler prestarted,
-        int  inner_control_hz = 1000,
+        int  inner_control_hz = 200,
         bool interpolate_cmds = true);
 
     ~CartesianMotionForceControl();
