@@ -341,8 +341,10 @@ void CartesianMotionForceControl::PeriodicCallback()
 
     if (rt_state_ == RTState::MOVING) {
         // --- MOVING state ---
-        std::array<double,7> interp_pose;
-        std::array<double,6> interp_velocity;
+        // Default to the previously sent pose so cancel/early-exit paths fall
+        // back to a continuous hold command rather than an uninitialized value.
+        std::array<double,7> interp_pose = last_sent_pose_;
+        std::array<double,6> interp_velocity = last_sent_vel_;
 
         bool in_progress = trajectory_.step(interp_pose, interp_velocity);
 
@@ -351,10 +353,17 @@ void CartesianMotionForceControl::PeriodicCallback()
             rt_state_ = RTState::STREAMING;
             shm_->is_moving.store(false);
 
+            // Hold the actual final trajectory sample. On normal completion this is
+            // the exact end pose; on cancel it remains the last sent pose. Holding
+            // last_sent_pose_ here can introduce a small backwards step on the final
+            // cycle, which shows up as a noticeable end-of-reset twitch.
+            last_sent_pose_ = interp_pose;
+            last_sent_vel_ = {};
+
             // Write end pose into SHM command so streaming holds here
             {
                 std::lock_guard<std::mutex> lock(shm_mutex_);
-                shm_->command.pose = last_sent_pose_;
+                shm_->command.pose = interp_pose;
                 shm_->command.wrench = {};
                 shm_->command.velocity = {};
                 shm_->command.acceleration = {};
@@ -364,14 +373,13 @@ void CartesianMotionForceControl::PeriodicCallback()
 
             // Send the last pose to hold position
             try {
-                robot_.StreamCartesianMotionForce(last_sent_pose_);
+                robot_.StreamCartesianMotionForce(interp_pose);
             } catch (const std::exception& e) {
                 logger()->error("CartesianMotionForceControl: StreamCartesianMotionForce error: {}", e.what());
                 shm_->emergency_stop.store(true);
                 is_running_.store(false);
                 send_error = true;
             }
-            if (!send_error) last_sent_vel_ = {};
         } else if (!CheckFinite(interp_pose)) {
             // NaN/Inf check
             logger()->error("{}", "CartesianMotionForceControl: NaN/Inf in trajectory pose");
@@ -487,9 +495,27 @@ void CartesianMotionForceControl::PeriodicCallback()
                         last_sent_vel_  = interp_vel;
                     }
                 } else {
-                    // No interpolation: snap to command — clamp first
-                    ClampCartesianPose(cmd.pose, last_sent_pose_);
-                    ClampCartesianVelocity(cmd.velocity, last_sent_vel_);
+                    // No interpolation: consume the sparse Python waypoint directly
+                    // on each decimation boundary. These boundary updates happen once
+                    // per command period (e.g. every 33 ms at 30 Hz), so safety
+                    // clamping must use that effective interval rather than 1 ms.
+                    // Otherwise each boundary step is limited to 0.5 mm, making
+                    // low-rate streaming appear artificially slow.
+                    const double effective_dt = cmd_decimation_ * kRtDt;
+                    ClampCartesianPose(
+                        cmd.pose,
+                        last_sent_pose_,
+                        kCartMaxLinearVel,
+                        kCartMaxAngularVel,
+                        effective_dt);
+                    ClampCartesianVelocity(
+                        cmd.velocity,
+                        last_sent_vel_,
+                        kCartMaxLinearVel,
+                        kCartMaxAngularVel,
+                        kCartMaxLinearAcc,
+                        kCartMaxAngularAcc,
+                        effective_dt);
                     try {
                         robot_.StreamCartesianMotionForce(
                             cmd.pose, cmd.wrench, cmd.velocity, cmd.acceleration);
